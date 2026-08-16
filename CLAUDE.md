@@ -16,6 +16,46 @@ repo, default `pulsemq.yaml`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
 metric names are intentionally kept — they describe the protocol, not the
 project.
 
+## Project history & status
+
+Current status: **v1.0.0 released** (tag `v1.0.0`, GitHub Release, and
+`ghcr.io/elpapimango/pulsemq:1.0.0`). Everything below is done and on `main`;
+CI (`ci.yml`) and image builds (`docker.yml`) are green. `git log` has the
+detail — this is the map.
+
+Milestones, in order:
+1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
+   sessions + routing + QoS 0/1/2, retained messages, wills, SQLite persistence,
+   Tokio TCP server. Verified against `mosquitto` v5 clients.
+2. **WebSocket** transport (`ws://` + `wss://`), spec §6, via a byte-stream
+   adapter reusing the generic connection task.
+3. **Dual license** (MIT OR Apache-2.0) + CI workflow.
+4. **Admin server** on a separate port: `/health`, Prometheus `/metrics`, and an
+   **MCP** (JSON-RPC) server; then a **bearer-token** guard for it.
+5. **Native TLS** (rustls) on both the MQTT and admin ports; then **mutual TLS**
+   with a client-CA trust store.
+6. **Cert-CN identity + per-identity ACLs**; ACL **hot-reload on SIGHUP** that
+   revokes live subscriptions and disconnects affected clients (`0x87`).
+7. **CLI** (`--help`) with a flag for every env option; then a **YAML config
+   file** (precedence: file < env < CLI); then exposed the remaining
+   capability knobs (`maximum_qos`, `retain_available`, `topic_alias_maximum`,
+   `server_keep_alive`).
+8. **Username/password auth** (PBKDF2-HMAC-SHA256, `--password-file`,
+   `--allow-anonymous`, `--hash-password`).
+9. **Docker** image + `docker-compose.yml` + GHCR publish workflow.
+10. **MQTT v3.1 & v3.1.1** support (version-aware codec; v5 stays the default).
+11. **v1.0.0** released.
+12. **Renamed** `mqtt_server` → **PulseMQ** (`pulsemq`): crate, binary, image,
+    GitHub repo (old URLs redirect). GHCR package was renamed with the repo.
+13. Docker workflow set to **`provenance: false`** and the GHCR package pruned
+    of orphaned untagged versions.
+
+No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
+`provenance: false` so its index still has two attestation child manifests
+(re-tag/rebuild to make it single-manifest); mutual-TLS on the *admin* port and
+WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
+SSE is not implemented (`GET /mcp` → 405).
+
 ## Commands
 
 ```bash
@@ -133,6 +173,31 @@ an example. `.github/workflows/docker.yml` builds and pushes to
 `provenance: false` so each tag is a single image manifest (no attestation
 child manifests → no untagged versions cluttering the GHCR package). There are
 two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml` (image).
+
+## Continuing on another machine
+
+Everything needed is in the repo; a fresh `git clone` + `cargo build` works.
+Notes for picking up in a new session/machine:
+
+- **Toolchain**: Rust ≥ 1.87 (uses `is_multiple_of`, `io::Error::other`). A C
+  compiler (`cc`) is required — `rusqlite` (bundled SQLite) and `ring` build it.
+- **Live testing** needs `mosquitto-clients` (`apt install mosquitto-clients`);
+  `mosquitto_pub/sub` can't do WebSockets, so WS/WSS are covered by the Rust
+  integration tests instead. The MQTT-spec PDFs in `spec/` need `poppler-utils`
+  to extract text if you want to consult them.
+- **Not in the repo** (were session-scratch only): the TLS test PKI
+  (`ca.pem`, `server.pem/.key`, `client.pem/.key` with CN `test-client`), any
+  `passwd` credential file, and `*.db` state — all regenerable. Cert-gen
+  commands are in the README (TLS section) and `tests/websocket.rs` generates a
+  wss cert in-test via `rcgen`, so the automated suite is self-contained.
+- **GitHub/GHCR**: repo `elpapimango/pulsemq`; image
+  `ghcr.io/elpapimango/pulsemq`. Image pushes happen only via `docker.yml`
+  (workflow `GITHUB_TOKEN` has `packages: write`). Managing GHCR packages from
+  the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
+  `repo,workflow,...` scopes can't list or delete packages).
+- **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
+  --all-targets --all-features -- -D warnings && cargo test` (25 tests), then
+  `cargo run -- --help`.
 
 ## Conventions
 
