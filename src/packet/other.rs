@@ -2,7 +2,7 @@
 
 use crate::codec::{Properties, Reader, Writer};
 use crate::error::Result;
-use crate::types::ReasonCode;
+use crate::types::{ProtocolVersion, ReasonCode};
 
 #[derive(Debug, Clone)]
 pub struct Disconnect {
@@ -39,10 +39,14 @@ impl Disconnect {
         })
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         let mut w = Writer::new();
-        // Omit everything when Normal disconnection with no properties.
-        if self.reason_code == ReasonCode::Success && self.properties.is_empty() {
+        // v3.x DISCONNECT has no variable header (and only the client ever
+        // sends it). Omit everything for v3.x, and for a v5 normal disconnect
+        // with no properties.
+        if !version.is_v5()
+            || (self.reason_code == ReasonCode::Success && self.properties.is_empty())
+        {
             return Ok(w.into_vec());
         }
         w.put_u8(self.reason_code.as_u8());

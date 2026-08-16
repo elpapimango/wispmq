@@ -2,7 +2,7 @@
 
 use crate::codec::{Properties, Reader, Writer};
 use crate::error::{malformed, protocol, Result};
-use crate::types::{QoS, ReasonCode};
+use crate::types::{ProtocolVersion, QoS, ReasonCode};
 
 /// The Will Message carried in a CONNECT payload (3.1.3.2 – 3.1.3.4).
 #[derive(Debug, Clone)]
@@ -51,13 +51,24 @@ impl Connect {
         }
 
         let keep_alive = r.u16()?;
-        let properties = Properties::decode(r)?;
+        // Properties exist only in MQTT v5 (protocol level 5). v3.1/v3.1.1 have
+        // none. The level is self-describing, so we branch on it here.
+        let has_properties = protocol_version == 5;
+        let properties = if has_properties {
+            Properties::decode(r)?
+        } else {
+            Properties::new()
+        };
 
         // Payload
         let client_id = r.utf8()?;
 
         let will = if will_flag {
-            let will_properties = Properties::decode(r)?;
+            let will_properties = if has_properties {
+                Properties::decode(r)?
+            } else {
+                Properties::new()
+            };
             let topic = r.utf8()?;
             let payload = r.binary()?;
             Some(Will {
@@ -115,11 +126,17 @@ impl Connect {
         }
         w.put_u8(flags);
         w.put_u16(self.keep_alive);
-        self.properties.encode(&mut w)?;
+        // Properties only exist in v5 (level 5).
+        let has_properties = self.protocol_version == 5;
+        if has_properties {
+            self.properties.encode(&mut w)?;
+        }
 
         w.put_utf8(&self.client_id);
         if let Some(will) = &self.will {
-            will.properties.encode(&mut w)?;
+            if has_properties {
+                will.properties.encode(&mut w)?;
+            }
             w.put_utf8(&will.topic);
             w.put_binary(&will.payload);
         }
@@ -132,23 +149,28 @@ impl Connect {
         Ok(w.into_vec())
     }
 
-    /// Validate protocol name/version. Returns the specific reason code the
-    /// server should send when it cannot accept the connection.
-    pub fn validate_protocol(&self) -> Result<()> {
-        if self.protocol_name != "MQTT" {
+    /// Validate protocol name/version, accepting MQTT v3.1 ("MQIsdp", level 3),
+    /// v3.1.1 ("MQTT", level 4) and v5.0 ("MQTT", level 5). Returns the negotiated
+    /// version, or an error carrying the reason code to send in CONNACK.
+    pub fn validate_protocol(&self) -> Result<ProtocolVersion> {
+        let expected_name = if self.protocol_version == 3 {
+            "MQIsdp"
+        } else {
+            "MQTT"
+        };
+        if self.protocol_name != expected_name {
             // [MQTT-3.1.2-1] Server MAY disconnect for an unacceptable name.
             return Err(protocol(format!(
                 "unsupported protocol name {:?}",
                 self.protocol_name
             )));
         }
-        if self.protocol_version != 5 {
-            return Err(crate::error::MqttError::Reason(
+        ProtocolVersion::from_level(self.protocol_version).ok_or_else(|| {
+            crate::error::MqttError::Reason(
                 ReasonCode::UnsupportedProtocolVersion,
                 format!("unsupported protocol version {}", self.protocol_version),
-            ));
-        }
-        Ok(())
+            )
+        })
     }
 }
 
@@ -168,14 +190,24 @@ impl Connack {
         }
     }
 
-    pub fn decode(r: &mut Reader) -> Result<Connack> {
+    pub fn decode(r: &mut Reader, version: ProtocolVersion) -> Result<Connack> {
         let ack_flags = r.u8()?;
         if ack_flags & 0xFE != 0 {
             return Err(malformed("CONNACK reserved acknowledge flags set"));
         }
         let session_present = ack_flags & 0x01 != 0;
-        let reason_code = ReasonCode::from_u8(r.u8()?)?;
-        let properties = Properties::decode(r)?;
+        let code = r.u8()?;
+        // v3.x uses a 1-byte return code (0-5); v5 uses a Reason Code + properties.
+        let reason_code = if version.is_v5() {
+            ReasonCode::from_u8(code)?
+        } else {
+            connack_return_to_reason(code)
+        };
+        let properties = if version.is_v5() {
+            Properties::decode(r)?
+        } else {
+            Properties::new()
+        };
         Ok(Connack {
             session_present,
             reason_code,
@@ -183,11 +215,44 @@ impl Connack {
         })
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         let mut w = Writer::new();
-        w.put_u8(if self.session_present { 0x01 } else { 0x00 });
-        w.put_u8(self.reason_code.as_u8());
-        self.properties.encode(&mut w)?;
+        // Session Present is only defined from v3.1.1 onward; in v3.1 the byte
+        // is reserved and MUST be 0.
+        let session_present = version != ProtocolVersion::V3_1 && self.session_present;
+        w.put_u8(if session_present { 0x01 } else { 0x00 });
+        if version.is_v5() {
+            w.put_u8(self.reason_code.as_u8());
+            self.properties.encode(&mut w)?;
+        } else {
+            w.put_u8(reason_to_connack_return(self.reason_code));
+        }
         Ok(w.into_vec())
+    }
+}
+
+/// Map a v5 Reason Code to a v3.x CONNACK return code (0-5).
+fn reason_to_connack_return(rc: ReasonCode) -> u8 {
+    match rc {
+        ReasonCode::Success => 0,
+        ReasonCode::UnsupportedProtocolVersion => 1,
+        ReasonCode::ClientIdentifierNotValid => 2,
+        ReasonCode::ServerUnavailable | ReasonCode::ServerBusy => 3,
+        ReasonCode::BadUserNameOrPassword => 4,
+        ReasonCode::NotAuthorized => 5,
+        // v3.x has no code for other failures; report "not authorized".
+        _ => 5,
+    }
+}
+
+/// Map a v3.x CONNACK return code to the closest v5 Reason Code.
+fn connack_return_to_reason(code: u8) -> ReasonCode {
+    match code {
+        0 => ReasonCode::Success,
+        1 => ReasonCode::UnsupportedProtocolVersion,
+        2 => ReasonCode::ClientIdentifierNotValid,
+        3 => ReasonCode::ServerUnavailable,
+        4 => ReasonCode::BadUserNameOrPassword,
+        _ => ReasonCode::NotAuthorized,
     }
 }

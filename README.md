@@ -1,14 +1,20 @@
 # mqtt_server
 
-An **MQTT v5.0 broker** written in Rust, built directly from the
+An **MQTT broker** written in Rust, built directly from the
 [OASIS MQTT Version 5.0 specification](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)
-(07 March 2019). It uses **Tokio** for asynchronous networking and **SQLite**
-(bundled, latest amalgamation, via `rusqlite`) for durable state.
+(07 March 2019). It also speaks **MQTT v3.1.1** and **v3.1**, negotiated
+per-connection (v5 is the primary/default protocol). It uses **Tokio** for
+asynchronous networking and **SQLite** (bundled, latest amalgamation, via
+`rusqlite`) for durable state.
 
 ## Features
 
 Implements the full MQTT v5.0 control-packet set and the core broker behaviour:
 
+- **Protocol versions**: MQTT **v5.0**, **v3.1.1** and **v3.1**, negotiated from
+  each client's CONNECT. The codec is version-aware (v3.x has no properties,
+  different CONNACK return codes, no reason codes in (un)subscribe acks, no
+  server-side DISCONNECT); v5 features degrade gracefully for older clients.
 - **All 15 control packets** — CONNECT, CONNACK, PUBLISH, PUBACK, PUBREC,
   PUBREL, PUBCOMP, SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK, PINGREQ,
   PINGRESP, DISCONNECT, AUTH — with full MQTT v5 **Properties** and
@@ -320,7 +326,8 @@ The raw-MQTT port and the WebSocket port are independent and can run at the same
 time. WebSocket connections carry MQTT Control Packets in binary frames and
 negotiate the `mqtt` subprotocol (spec §6); packet boundaries need not align
 with frame boundaries. TLS termination and client-certificate identity (CN)
-work identically on both transports.
+work identically on both transports. Each transport accepts MQTT **v3.1, v3.1.1
+and v5** clients interchangeably (the version is negotiated per connection).
 
 ```bash
 # Plain MQTT on 1883 and MQTT-over-WebSockets on 8080, together:

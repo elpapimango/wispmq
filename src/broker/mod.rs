@@ -325,9 +325,10 @@ impl Broker {
         out: OutTx,
         mut identity: Option<String>,
     ) -> Result<Accepted, Connack> {
-        if let Err(e) = connect.validate_protocol() {
-            return Err(Connack::new(false, e.reason_code()));
-        }
+        let version = match connect.validate_protocol() {
+            Ok(v) => v,
+            Err(e) => return Err(Connack::new(false, e.reason_code())),
+        };
         let cfg = &self.inner.config;
 
         // Authentication (3.1.3.5 / 3.2.2). When a credential store is
@@ -379,15 +380,28 @@ impl Broker {
             (connect.client_id.clone(), false)
         };
 
-        // Session Expiry Interval, clamped to the server maximum.
-        let requested_expiry = connect
-            .properties
-            .session_expiry_interval
-            .unwrap_or(0)
-            .min(cfg.max_session_expiry);
+        // Session Expiry Interval, clamped to the server maximum. v3.x has no
+        // expiry property: a non-clean session persists (up to the server cap),
+        // a clean session does not persist.
+        let requested_expiry = if version.is_v5() {
+            connect
+                .properties
+                .session_expiry_interval
+                .unwrap_or(0)
+                .min(cfg.max_session_expiry)
+        } else if connect.clean_start {
+            0
+        } else {
+            cfg.max_session_expiry
+        };
 
-        // Keep Alive: server override wins (3.2.2.3.9).
-        let effective_keep_alive = cfg.server_keep_alive.unwrap_or(connect.keep_alive);
+        // Keep Alive: in v5 the server may override via CONNACK (3.2.2.3.9);
+        // v3.x has no such property, so the client's value stands.
+        let effective_keep_alive = if version.is_v5() {
+            cfg.server_keep_alive.unwrap_or(connect.keep_alive)
+        } else {
+            connect.keep_alive
+        };
 
         let mut st = self.lock();
         let epoch = st.next_epoch;

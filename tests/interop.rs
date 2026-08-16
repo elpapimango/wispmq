@@ -11,7 +11,7 @@ use mqtt_server::config::Config;
 use mqtt_server::framing::{read_packet, write_packet, ReadOutcome};
 use mqtt_server::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
 use mqtt_server::storage::Storage;
-use mqtt_server::types::{QoS, ReasonCode};
+use mqtt_server::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
 /// Start a broker on an ephemeral loopback port and return its address.
 async fn start_broker() -> String {
@@ -55,10 +55,10 @@ fn connect_packet(client_id: &str) -> Packet {
 
 async fn connect(addr: &str, client_id: &str) -> TcpStream {
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    write_packet(&mut stream, &connect_packet(client_id))
+    write_packet(&mut stream, &connect_packet(client_id), V5)
         .await
         .unwrap();
-    match read_packet(&mut stream, 1 << 20).await.unwrap() {
+    match read_packet(&mut stream, 1 << 20, V5).await.unwrap() {
         ReadOutcome::Packet(Packet::Connack(c), _) => {
             assert_eq!(c.reason_code, ReasonCode::Success);
         }
@@ -94,8 +94,8 @@ async fn qos1_publish_is_routed_to_subscriber() {
             retain_handling: mqtt_server::packet::RetainHandling::SendAtSubscribe,
         }],
     });
-    write_packet(&mut sub, &subscribe).await.unwrap();
-    match read_packet(&mut sub, 1 << 20).await.unwrap() {
+    write_packet(&mut sub, &subscribe, V5).await.unwrap();
+    match read_packet(&mut sub, 1 << 20, V5).await.unwrap() {
         ReadOutcome::Packet(Packet::Suback(s), _) => {
             assert_eq!(s.reason_codes, vec![ReasonCode::GrantedQoS1]);
         }
@@ -113,15 +113,15 @@ async fn qos1_publish_is_routed_to_subscriber() {
         properties: Properties::new(),
         payload: b"22.4C".to_vec(),
     });
-    write_packet(&mut pubr, &publish).await.unwrap();
+    write_packet(&mut pubr, &publish, V5).await.unwrap();
     // Publisher gets a PUBACK.
-    match read_packet(&mut pubr, 1 << 20).await.unwrap() {
+    match read_packet(&mut pubr, 1 << 20, V5).await.unwrap() {
         ReadOutcome::Packet(Packet::Puback(a), _) => assert_eq!(a.packet_id, 10),
         _ => panic!("expected PUBACK"),
     }
 
     // Subscriber receives the forwarded PUBLISH.
-    let received = tokio::time::timeout(Duration::from_secs(2), read_packet(&mut sub, 1 << 20))
+    let received = tokio::time::timeout(Duration::from_secs(2), read_packet(&mut sub, 1 << 20, V5))
         .await
         .expect("timed out waiting for delivery")
         .unwrap();
@@ -150,7 +150,7 @@ async fn retained_message_delivered_on_subscribe() {
         properties: Properties::new(),
         payload: b"on".to_vec(),
     });
-    write_packet(&mut pubr, &publish).await.unwrap();
+    write_packet(&mut pubr, &publish, V5).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // A later subscriber should immediately receive the retained message.
@@ -166,15 +166,16 @@ async fn retained_message_delivered_on_subscribe() {
             retain_handling: mqtt_server::packet::RetainHandling::SendAtSubscribe,
         }],
     });
-    write_packet(&mut sub, &subscribe).await.unwrap();
+    write_packet(&mut sub, &subscribe, V5).await.unwrap();
 
     // SUBACK, then the retained PUBLISH.
     let mut saw_publish = false;
     for _ in 0..2 {
-        let outcome = tokio::time::timeout(Duration::from_secs(2), read_packet(&mut sub, 1 << 20))
-            .await
-            .expect("timeout")
-            .unwrap();
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(2), read_packet(&mut sub, 1 << 20, V5))
+                .await
+                .expect("timeout")
+                .unwrap();
         if let ReadOutcome::Packet(Packet::Publish(p), _) = outcome {
             assert_eq!(p.topic, "state/lamp");
             assert_eq!(p.payload, b"on");

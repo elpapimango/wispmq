@@ -2,7 +2,7 @@
 
 use crate::codec::{Properties, Reader, Writer};
 use crate::error::{malformed, Result};
-use crate::types::{QoS, ReasonCode};
+use crate::types::{ProtocolVersion, QoS, ReasonCode};
 
 /// Retain Handling option in a Subscription Options byte (3.8.3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,24 +44,36 @@ pub struct Subscribe {
 }
 
 impl Subscribe {
-    pub fn decode(r: &mut Reader) -> Result<Subscribe> {
+    pub fn decode(r: &mut Reader, version: ProtocolVersion) -> Result<Subscribe> {
         let packet_id = r.u16()?;
         if packet_id == 0 {
             return Err(malformed("SUBSCRIBE with Packet Identifier 0"));
         }
-        let properties = Properties::decode(r)?;
+        let properties = if version.has_properties() {
+            Properties::decode(r)?
+        } else {
+            Properties::new()
+        };
         let mut filters = Vec::new();
         while r.has_remaining() {
             let filter = r.utf8()?;
             let opts = r.u8()?;
-            // Bits 6-7 reserved, MUST be 0 [MQTT-3.8.3-5].
-            if opts & 0xC0 != 0 {
-                return Err(malformed("reserved bits set in Subscription Options"));
-            }
+            // In v3.x only bits 0-1 (QoS) are defined; bits 2-7 are reserved.
+            // In v5, bits 2-5 carry No Local / Retain As Published / Retain
+            // Handling, and bits 6-7 are reserved and MUST be 0 [MQTT-3.8.3-5].
+            let (no_local, retain_as_published, retain_handling) = if version.has_properties() {
+                if opts & 0xC0 != 0 {
+                    return Err(malformed("reserved bits set in Subscription Options"));
+                }
+                (
+                    opts & 0x04 != 0,
+                    opts & 0x08 != 0,
+                    RetainHandling::from_u8((opts & 0x30) >> 4)?,
+                )
+            } else {
+                (false, false, RetainHandling::SendAtSubscribe)
+            };
             let qos = QoS::from_u8(opts & 0x03)?;
-            let no_local = opts & 0x04 != 0;
-            let retain_as_published = opts & 0x08 != 0;
-            let retain_handling = RetainHandling::from_u8((opts & 0x30) >> 4)?;
             filters.push(TopicFilter {
                 filter,
                 qos,
@@ -81,20 +93,24 @@ impl Subscribe {
         })
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         let mut w = Writer::new();
         w.put_u16(self.packet_id);
-        self.properties.encode(&mut w)?;
+        if version.has_properties() {
+            self.properties.encode(&mut w)?;
+        }
         for f in &self.filters {
             w.put_utf8(&f.filter);
             let mut opts = f.qos.as_u8();
-            if f.no_local {
-                opts |= 0x04;
+            if version.has_properties() {
+                if f.no_local {
+                    opts |= 0x04;
+                }
+                if f.retain_as_published {
+                    opts |= 0x08;
+                }
+                opts |= (f.retain_handling as u8) << 4;
             }
-            if f.retain_as_published {
-                opts |= 0x08;
-            }
-            opts |= (f.retain_handling as u8) << 4;
             w.put_u8(opts);
         }
         Ok(w.into_vec())
@@ -119,12 +135,21 @@ impl SubAck {
         }
     }
 
-    pub fn decode(r: &mut Reader) -> Result<SubAck> {
+    /// Decode a SUBACK (`unsuback == false`) or UNSUBACK (`true`). In v3.x,
+    /// UNSUBACK carries no reason codes at all — just the Packet Identifier.
+    pub fn decode(r: &mut Reader, version: ProtocolVersion, unsuback: bool) -> Result<SubAck> {
         let packet_id = r.u16()?;
-        let properties = Properties::decode(r)?;
+        let properties = if version.has_properties() {
+            Properties::decode(r)?
+        } else {
+            Properties::new()
+        };
         let mut reason_codes = Vec::new();
-        while r.has_remaining() {
-            reason_codes.push(ReasonCode::from_u8(r.u8()?)?);
+        // v3.x UNSUBACK has no payload after the packet id.
+        if !(unsuback && !version.has_properties()) {
+            while r.has_remaining() {
+                reason_codes.push(ReasonCode::from_u8(r.u8()?)?);
+            }
         }
         Ok(SubAck {
             packet_id,
@@ -133,12 +158,26 @@ impl SubAck {
         })
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion, unsuback: bool) -> Result<Vec<u8>> {
         let mut w = Writer::new();
         w.put_u16(self.packet_id);
-        self.properties.encode(&mut w)?;
+        if version.has_properties() {
+            self.properties.encode(&mut w)?;
+        }
+        // v3.x UNSUBACK is just the Packet Identifier (no reason codes).
+        if unsuback && !version.has_properties() {
+            return Ok(w.into_vec());
+        }
         for rc in &self.reason_codes {
-            w.put_u8(rc.as_u8());
+            // v3.x SUBACK return codes: 0/1/2 for granted QoS, 0x80 for failure.
+            let byte = if version.has_properties() {
+                rc.as_u8()
+            } else if rc.is_error() {
+                0x80
+            } else {
+                rc.as_u8()
+            };
+            w.put_u8(byte);
         }
         Ok(w.into_vec())
     }
@@ -152,12 +191,16 @@ pub struct Unsubscribe {
 }
 
 impl Unsubscribe {
-    pub fn decode(r: &mut Reader) -> Result<Unsubscribe> {
+    pub fn decode(r: &mut Reader, version: ProtocolVersion) -> Result<Unsubscribe> {
         let packet_id = r.u16()?;
         if packet_id == 0 {
             return Err(malformed("UNSUBSCRIBE with Packet Identifier 0"));
         }
-        let properties = Properties::decode(r)?;
+        let properties = if version.has_properties() {
+            Properties::decode(r)?
+        } else {
+            Properties::new()
+        };
         let mut filters = Vec::new();
         while r.has_remaining() {
             filters.push(r.utf8()?);
@@ -172,10 +215,12 @@ impl Unsubscribe {
         })
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         let mut w = Writer::new();
         w.put_u16(self.packet_id);
-        self.properties.encode(&mut w)?;
+        if version.has_properties() {
+            self.properties.encode(&mut w)?;
+        }
         for f in &self.filters {
             w.put_utf8(f);
         }

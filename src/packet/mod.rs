@@ -14,9 +14,9 @@ pub use other::{Auth, Disconnect};
 pub use publish::{PubAck, Publish};
 pub use subscribe::{RetainHandling, SubAck, Subscribe, TopicFilter, Unsubscribe};
 
-use crate::codec::{varint_len, Reader, Writer};
+use crate::codec::{Reader, Writer};
 use crate::error::{malformed, Result};
-use crate::types::PacketType;
+use crate::types::{PacketType, ProtocolVersion};
 
 /// A fully decoded MQTT control packet.
 #[derive(Debug, Clone)]
@@ -81,7 +81,11 @@ impl Packet {
     }
 
     /// Decode a complete packet from its raw bytes (fixed header included).
-    pub fn decode(buf: &[u8]) -> Result<Packet> {
+    ///
+    /// `version` is the connection's negotiated protocol version and governs
+    /// version-specific framing (v3.x has no Properties, different SUB/UNSUB
+    /// ack payloads, etc.). CONNECT is self-describing and ignores `version`.
+    pub fn decode(buf: &[u8], version: ProtocolVersion) -> Result<Packet> {
         let mut r = Reader::new(buf);
         let first = r.u8()?;
         let ptype = PacketType::from_u8(first >> 4)?;
@@ -102,9 +106,9 @@ impl Packet {
             }
             PacketType::Connack => {
                 check_flags(flags, 0, "CONNACK")?;
-                Ok(Packet::Connack(Connack::decode(&mut body)?))
+                Ok(Packet::Connack(Connack::decode(&mut body, version)?))
             }
-            PacketType::Publish => Ok(Packet::Publish(Publish::decode(flags, &mut body)?)),
+            PacketType::Publish => Ok(Packet::Publish(Publish::decode(flags, &mut body, version)?)),
             PacketType::Puback => {
                 check_flags(flags, 0, "PUBACK")?;
                 Ok(Packet::Puback(PubAck::decode(&mut body, remaining_len)?))
@@ -123,19 +127,21 @@ impl Packet {
             }
             PacketType::Subscribe => {
                 check_flags(flags, 0b0010, "SUBSCRIBE")?;
-                Ok(Packet::Subscribe(Subscribe::decode(&mut body)?))
+                Ok(Packet::Subscribe(Subscribe::decode(&mut body, version)?))
             }
             PacketType::Suback => {
                 check_flags(flags, 0, "SUBACK")?;
-                Ok(Packet::Suback(SubAck::decode(&mut body)?))
+                Ok(Packet::Suback(SubAck::decode(&mut body, version, false)?))
             }
             PacketType::Unsubscribe => {
                 check_flags(flags, 0b0010, "UNSUBSCRIBE")?;
-                Ok(Packet::Unsubscribe(Unsubscribe::decode(&mut body)?))
+                Ok(Packet::Unsubscribe(Unsubscribe::decode(
+                    &mut body, version,
+                )?))
             }
             PacketType::Unsuback => {
                 check_flags(flags, 0, "UNSUBACK")?;
-                Ok(Packet::Unsuback(SubAck::decode(&mut body)?))
+                Ok(Packet::Unsuback(SubAck::decode(&mut body, version, true)?))
             }
             PacketType::Pingreq => {
                 check_flags(flags, 0, "PINGREQ")?;
@@ -154,29 +160,33 @@ impl Packet {
             }
             PacketType::Auth => {
                 check_flags(flags, 0, "AUTH")?;
+                if !version.is_v5() {
+                    return Err(malformed("AUTH packet is only valid in MQTT v5"));
+                }
                 Ok(Packet::Auth(Auth::decode(&mut body, remaining_len)?))
             }
         }
     }
 
-    /// Encode this packet to a fresh byte vector, fixed header included.
-    pub fn encode(&self) -> Result<Vec<u8>> {
+    /// Encode this packet to a fresh byte vector, fixed header included,
+    /// following the given protocol version's framing.
+    pub fn encode(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         // Each encoder produces (flags, body). We then prepend the fixed header.
         let (flags, body) = match self {
             Packet::Connect(p) => (0u8, p.encode_body()?),
-            Packet::Connack(p) => (0, p.encode_body()?),
-            Packet::Publish(p) => (p.fixed_flags(), p.encode_body()?),
-            Packet::Puback(p) => (0, p.encode_body()?),
-            Packet::Pubrec(p) => (0, p.encode_body()?),
-            Packet::Pubrel(p) => (0b0010, p.encode_body()?),
-            Packet::Pubcomp(p) => (0, p.encode_body()?),
-            Packet::Subscribe(p) => (0b0010, p.encode_body()?),
-            Packet::Suback(p) => (0, p.encode_body()?),
-            Packet::Unsubscribe(p) => (0b0010, p.encode_body()?),
-            Packet::Unsuback(p) => (0, p.encode_body()?),
+            Packet::Connack(p) => (0, p.encode_body(version)?),
+            Packet::Publish(p) => (p.fixed_flags(), p.encode_body(version)?),
+            Packet::Puback(p) => (0, p.encode_body(version)?),
+            Packet::Pubrec(p) => (0, p.encode_body(version)?),
+            Packet::Pubrel(p) => (0b0010, p.encode_body(version)?),
+            Packet::Pubcomp(p) => (0, p.encode_body(version)?),
+            Packet::Subscribe(p) => (0b0010, p.encode_body(version)?),
+            Packet::Suback(p) => (0, p.encode_body(version, false)?),
+            Packet::Unsubscribe(p) => (0b0010, p.encode_body(version)?),
+            Packet::Unsuback(p) => (0, p.encode_body(version, true)?),
             Packet::Pingreq => (0, Vec::new()),
             Packet::Pingresp => (0, Vec::new()),
-            Packet::Disconnect(p) => (0, p.encode_body()?),
+            Packet::Disconnect(p) => (0, p.encode_body(version)?),
             Packet::Auth(p) => (0, p.encode_body()?),
         };
 
@@ -186,20 +196,6 @@ impl Packet {
         out.put_bytes(&body);
         Ok(out.into_vec())
     }
-
-    /// Total encoded size in bytes, used to enforce Maximum Packet Size before
-    /// actually serializing (3.1.2.11.4).
-    pub fn encoded_size(&self) -> Result<usize> {
-        // Cheap path: re-use encode() length. Bodies here are small for control
-        // packets; for PUBLISH the caller usually knows this already.
-        Ok(self.encode()?.len())
-    }
-}
-
-/// Convenience for computing a fixed header + body length without a second
-/// allocation when only the size is needed.
-pub fn total_len(body_len: usize) -> usize {
-    1 + varint_len(body_len as u32) + body_len
 }
 
 fn check_flags(flags: u8, expected: u8, name: &str) -> Result<()> {

@@ -9,6 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::codec::MAX_VARIABLE_BYTE_INTEGER;
 use crate::error::{malformed, MqttError, Result};
 use crate::packet::Packet;
+use crate::types::ProtocolVersion;
 
 /// Outcome of attempting to read a packet.
 pub enum ReadOutcome {
@@ -21,7 +22,11 @@ pub enum ReadOutcome {
 /// Read one complete control packet. Enforces `max_packet_size` on the total
 /// encoded length (fixed header included), returning a Packet too large error
 /// when exceeded.
-pub async fn read_packet<R>(stream: &mut R, max_packet_size: u32) -> Result<ReadOutcome>
+pub async fn read_packet<R>(
+    stream: &mut R,
+    max_packet_size: u32,
+    version: ProtocolVersion,
+) -> Result<ReadOutcome>
 where
     R: AsyncRead + Unpin,
 {
@@ -67,17 +72,21 @@ where
     stream.read_exact(&mut buf[start..]).await?;
 
     let size = buf.len();
-    let packet = Packet::decode(&buf)?;
+    let packet = Packet::decode(&buf, version)?;
     Ok(ReadOutcome::Packet(packet, size))
 }
 
 /// Encode and write a single packet, flushing the stream. Returns the number
 /// of bytes written.
-pub async fn write_packet<W>(stream: &mut W, packet: &Packet) -> Result<usize>
+pub async fn write_packet<W>(
+    stream: &mut W,
+    packet: &Packet,
+    version: ProtocolVersion,
+) -> Result<usize>
 where
     W: AsyncWrite + Unpin,
 {
-    let bytes = packet.encode()?;
+    let bytes = packet.encode(version)?;
     stream.write_all(&bytes).await?;
     stream.flush().await?;
     Ok(bytes.len())

@@ -49,6 +49,43 @@ impl PacketType {
     }
 }
 
+/// MQTT protocol version negotiated in CONNECT. The wire "protocol level" is
+/// 3 for v3.1 (name "MQIsdp"), 4 for v3.1.1 and 5 for v5.0 (name "MQTT").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolVersion {
+    V3_1,
+    V3_1_1,
+    V5,
+}
+
+impl ProtocolVersion {
+    pub fn level(self) -> u8 {
+        match self {
+            ProtocolVersion::V3_1 => 3,
+            ProtocolVersion::V3_1_1 => 4,
+            ProtocolVersion::V5 => 5,
+        }
+    }
+
+    pub fn from_level(level: u8) -> Option<Self> {
+        match level {
+            3 => Some(ProtocolVersion::V3_1),
+            4 => Some(ProtocolVersion::V3_1_1),
+            5 => Some(ProtocolVersion::V5),
+            _ => None,
+        }
+    }
+
+    pub fn is_v5(self) -> bool {
+        matches!(self, ProtocolVersion::V5)
+    }
+
+    /// True when this version carries MQTT v5 Properties.
+    pub fn has_properties(self) -> bool {
+        self.is_v5()
+    }
+}
+
 /// Quality of Service level (2 bits). Spec 4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]

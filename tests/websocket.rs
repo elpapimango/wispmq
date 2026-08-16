@@ -18,7 +18,7 @@ use mqtt_server::codec::Properties;
 use mqtt_server::config::Config;
 use mqtt_server::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
 use mqtt_server::storage::Storage;
-use mqtt_server::types::{QoS, ReasonCode};
+use mqtt_server::types::{ProtocolVersion, QoS, ReasonCode};
 
 /// Reserve an ephemeral loopback port and return its address.
 fn free_addr() -> std::net::SocketAddr {
@@ -28,10 +28,15 @@ fn free_addr() -> std::net::SocketAddr {
     addr
 }
 
-fn connect_packet(client_id: &str) -> Packet {
+fn connect_packet(client_id: &str, version: ProtocolVersion) -> Packet {
+    let protocol_name = if version == ProtocolVersion::V3_1 {
+        "MQIsdp"
+    } else {
+        "MQTT"
+    };
     Packet::Connect(Connect {
-        protocol_name: "MQTT".into(),
-        protocol_version: 5,
+        protocol_name: protocol_name.into(),
+        protocol_version: version.level(),
         clean_start: true,
         keep_alive: 0,
         properties: Properties::new(),
@@ -69,17 +74,17 @@ fn publish_packet(topic: &str, payload: &[u8]) -> Packet {
 }
 
 /// Send one MQTT packet as a single WebSocket binary frame.
-async fn send<S>(ws: &mut WebSocketStream<S>, packet: &Packet)
+async fn send<S>(ws: &mut WebSocketStream<S>, packet: &Packet, version: ProtocolVersion)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    ws.send(Message::binary(packet.encode().unwrap()))
+    ws.send(Message::binary(packet.encode(version).unwrap()))
         .await
         .unwrap();
 }
 
 /// Receive the next MQTT packet, decoding from a binary frame.
-async fn recv<S>(ws: &mut WebSocketStream<S>) -> Packet
+async fn recv<S>(ws: &mut WebSocketStream<S>, version: ProtocolVersion) -> Packet
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -90,7 +95,7 @@ where
             .expect("stream ended")
             .expect("websocket error");
         if msg.is_binary() {
-            return Packet::decode(msg.into_data().as_ref()).unwrap();
+            return Packet::decode(msg.into_data().as_ref(), version).unwrap();
         }
     }
 }
@@ -121,36 +126,44 @@ async fn start_ws_broker(config: Config) -> Broker {
 
 /// Run a full subscribe → publish → deliver round trip over an established
 /// WebSocket MQTT connection pair.
-async fn round_trip<S>(sub: &mut WebSocketStream<S>, publisher: &mut WebSocketStream<S>)
-where
+async fn round_trip<S>(
+    sub: &mut WebSocketStream<S>,
+    publisher: &mut WebSocketStream<S>,
+    version: ProtocolVersion,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     // Subscriber.
-    send(sub, &connect_packet("ws-sub")).await;
-    match recv(sub).await {
+    send(sub, &connect_packet("ws-sub", version), version).await;
+    match recv(sub, version).await {
         Packet::Connack(c) => assert_eq!(c.reason_code, ReasonCode::Success),
         other => panic!("expected CONNACK, got {}", other.name()),
     }
-    send(sub, &subscribe_packet("ws/#")).await;
-    match recv(sub).await {
+    send(sub, &subscribe_packet("ws/#"), version).await;
+    match recv(sub, version).await {
         Packet::Suback(s) => assert_eq!(s.reason_codes, vec![ReasonCode::GrantedQoS1]),
         other => panic!("expected SUBACK, got {}", other.name()),
     }
 
     // Publisher.
-    send(publisher, &connect_packet("ws-pub")).await;
-    match recv(publisher).await {
+    send(publisher, &connect_packet("ws-pub", version), version).await;
+    match recv(publisher, version).await {
         Packet::Connack(c) => assert_eq!(c.reason_code, ReasonCode::Success),
         other => panic!("expected CONNACK, got {}", other.name()),
     }
-    send(publisher, &publish_packet("ws/hello", b"over-websockets")).await;
-    match recv(publisher).await {
+    send(
+        publisher,
+        &publish_packet("ws/hello", b"over-websockets"),
+        version,
+    )
+    .await;
+    match recv(publisher, version).await {
         Packet::Puback(a) => assert_eq!(a.packet_id, 7),
         other => panic!("expected PUBACK, got {}", other.name()),
     }
 
     // Delivery to the subscriber.
-    match recv(sub).await {
+    match recv(sub, version).await {
         Packet::Publish(p) => {
             assert_eq!(p.topic, "ws/hello");
             assert_eq!(p.payload, b"over-websockets");
@@ -183,7 +196,28 @@ async fn mqtt_over_plain_websocket() {
         .await
         .unwrap();
 
-    round_trip(&mut sub, &mut publisher).await;
+    round_trip(&mut sub, &mut publisher, ProtocolVersion::V5).await;
+}
+
+#[tokio::test]
+async fn mqtt_v311_over_plain_websocket() {
+    // MQTT v3.1.1 (protocol level 4) over WebSockets: no properties on the wire.
+    let addr = free_addr();
+    let config = Config {
+        ws_listen_addr: Some(addr),
+        ..Config::default()
+    };
+    let _broker = start_ws_broker(config).await;
+
+    let url = format!("ws://{addr}/mqtt");
+    let (mut sub, _) = tokio_tungstenite::connect_async(mqtt_request(&url))
+        .await
+        .unwrap();
+    let (mut publisher, _) = tokio_tungstenite::connect_async(mqtt_request(&url))
+        .await
+        .unwrap();
+
+    round_trip(&mut sub, &mut publisher, ProtocolVersion::V3_1_1).await;
 }
 
 #[tokio::test]
@@ -234,7 +268,7 @@ async fn mqtt_over_websocket_with_tls() {
             .await
             .unwrap();
 
-    round_trip(&mut sub, &mut publisher).await;
+    round_trip(&mut sub, &mut publisher, ProtocolVersion::V5).await;
 
     let _ = std::fs::remove_dir_all(&dir);
 }

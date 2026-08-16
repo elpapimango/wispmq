@@ -18,11 +18,17 @@ use crate::error::{MqttError, Result};
 use crate::framing::{read_packet, write_packet, ReadOutcome};
 use crate::metrics::Metrics;
 use crate::packet::{Disconnect, Packet};
-use crate::types::ReasonCode;
+use crate::types::{ProtocolVersion, ReasonCode};
 
-/// Write a packet and record it in the metrics counters.
-async fn send<W: AsyncWrite + Unpin>(wr: &mut W, packet: &Packet, metrics: &Metrics) -> Result<()> {
-    let n = write_packet(wr, packet).await?;
+/// Write a packet (in the connection's protocol version) and record it in the
+/// metrics counters.
+async fn send<W: AsyncWrite + Unpin>(
+    wr: &mut W,
+    packet: &Packet,
+    version: ProtocolVersion,
+    metrics: &Metrics,
+) -> Result<()> {
+    let n = write_packet(wr, packet, version).await?;
     Metrics::inc(&metrics.packets_sent);
     Metrics::add(&metrics.bytes_sent, n as u64);
     Ok(())
@@ -148,8 +154,14 @@ where
     let max_packet = broker.config().max_packet_size;
     let metrics = broker.metrics();
 
-    // --- Handshake: the first packet MUST be CONNECT (3.1.0-1). ---
-    let first = match timeout(CONNECT_TIMEOUT, read_packet(&mut rd, max_packet)).await {
+    // --- Handshake: the first packet MUST be CONNECT (3.1.0-1). CONNECT is
+    // self-describing, so it is decoded with a placeholder version. ---
+    let first = match timeout(
+        CONNECT_TIMEOUT,
+        read_packet(&mut rd, max_packet, ProtocolVersion::V5),
+    )
+    .await
+    {
         Ok(Ok(ReadOutcome::Packet(p, n))) => {
             Metrics::inc(&metrics.packets_received);
             Metrics::add(&metrics.bytes_received, n as u64);
@@ -170,13 +182,18 @@ where
         }
     };
 
+    // Negotiated protocol version drives all subsequent framing. An unknown
+    // level falls back to v3.1.1 solely to encode the rejection CONNACK.
+    let version =
+        ProtocolVersion::from_level(connect.protocol_version).unwrap_or(ProtocolVersion::V3_1_1);
+
     let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
 
     let accepted = match broker.handle_connect(connect, tx, identity) {
         Ok(a) => a,
         Err(connack) => {
             // Send the rejection CONNACK, then close.
-            send(&mut wr, &Packet::Connack(connack), metrics).await?;
+            send(&mut wr, &Packet::Connack(connack), version, metrics).await?;
             return Ok(());
         }
     };
@@ -186,10 +203,17 @@ where
     let keep_alive = accepted.keep_alive;
     let identity_log = accepted.identity.as_deref().unwrap_or("<none>");
     tracing::info!(
-        "client {client_id:?} connected from {peer} (identity={identity_log}, keep_alive={keep_alive}s)"
+        "client {client_id:?} connected from {peer} (v{}, identity={identity_log}, keep_alive={keep_alive}s)",
+        version.level()
     );
 
-    send(&mut wr, &Packet::Connack(accepted.connack), metrics).await?;
+    send(
+        &mut wr,
+        &Packet::Connack(accepted.connack),
+        version,
+        metrics,
+    )
+    .await?;
 
     // Keep Alive: disconnect if no packet arrives within 1.5x the interval
     // (3.1.2.10). Zero disables the timeout.
@@ -209,20 +233,22 @@ where
             maybe_out = rx.recv() => {
                 match maybe_out {
                     Some(Outgoing::Send(publish)) => {
-                        send(&mut wr, &Packet::Publish(*publish), metrics).await?;
+                        send(&mut wr, &Packet::Publish(*publish), version, metrics).await?;
                     }
                     Some(Outgoing::Control(pkt)) => {
-                        send(&mut wr, &pkt, metrics).await?;
+                        send(&mut wr, &pkt, version, metrics).await?;
                     }
                     Some(Outgoing::Shutdown(rc)) => {
                         // Server-initiated close: session takeover (0x8E) or an
                         // administrative disconnect such as ACL revocation (0x87).
-                        // Send DISCONNECT with the reason, then stop. The Will is
-                        // suppressed; on takeover our epoch is already stale so
-                        // the subsequent cleanup is a no-op, while for an
-                        // administrative close the epoch still matches and the
-                        // session is torn down / expired normally.
-                        let _ = send(&mut wr, &Packet::Disconnect(Disconnect::new(rc)), metrics).await;
+                        // v5 gets a DISCONNECT with the reason; v3.x has no server
+                        // DISCONNECT, so we just close. The Will is suppressed; on
+                        // takeover our epoch is already stale so cleanup is a no-op,
+                        // while for an administrative close the epoch still matches
+                        // and the session is torn down / expired normally.
+                        if version.is_v5() {
+                            let _ = send(&mut wr, &Packet::Disconnect(Disconnect::new(rc)), version, metrics).await;
+                        }
                         publish_will = false;
                         break;
                     }
@@ -231,7 +257,7 @@ where
             }
 
             // Inbound packets from the client.
-            read = timeout(read_timeout, read_packet(&mut rd, max_packet)) => {
+            read = timeout(read_timeout, read_packet(&mut rd, max_packet, version)) => {
                 match read {
                     Ok(Ok(ReadOutcome::Packet(packet, n))) => {
                         Metrics::inc(&metrics.packets_received);
@@ -240,11 +266,14 @@ where
                         match broker.handle_packet(&client_id, epoch, packet) {
                             Action::Continue => {}
                             Action::ServerDisconnect(rc) => {
-                                let _ = send(
-                                    &mut wr,
-                                    &Packet::Disconnect(Disconnect::new(rc)),
-                                    metrics,
-                                ).await;
+                                if version.is_v5() {
+                                    let _ = send(
+                                        &mut wr,
+                                        &Packet::Disconnect(Disconnect::new(rc)),
+                                        version,
+                                        metrics,
+                                    ).await;
+                                }
                                 break;
                             }
                             Action::ClientDisconnect { publish_will: pw } => {
@@ -259,22 +288,28 @@ where
                     }
                     Ok(Err(e)) => {
                         // Malformed / protocol error: inform the peer if we can.
-                        let rc = e.reason_code();
-                        let _ = send(
-                            &mut wr,
-                            &Packet::Disconnect(Disconnect::new(rc)),
-                            metrics,
-                        ).await;
+                        if version.is_v5() {
+                            let rc = e.reason_code();
+                            let _ = send(
+                                &mut wr,
+                                &Packet::Disconnect(Disconnect::new(rc)),
+                                version,
+                                metrics,
+                            ).await;
+                        }
                         tracing::debug!("{client_id:?} protocol error: {e}");
                         break;
                     }
                     Err(_) => {
                         // Keep Alive expired (3.1.2.10-1).
-                        let _ = send(
-                            &mut wr,
-                            &Packet::Disconnect(Disconnect::new(ReasonCode::KeepAliveTimeout)),
-                            metrics,
-                        ).await;
+                        if version.is_v5() {
+                            let _ = send(
+                                &mut wr,
+                                &Packet::Disconnect(Disconnect::new(ReasonCode::KeepAliveTimeout)),
+                                version,
+                                metrics,
+                            ).await;
+                        }
                         tracing::debug!("{client_id:?} keep-alive timeout");
                         break;
                     }

@@ -3,7 +3,7 @@
 
 use crate::codec::{Properties, Reader, Writer};
 use crate::error::{malformed, Result};
-use crate::types::{QoS, ReasonCode};
+use crate::types::{ProtocolVersion, QoS, ReasonCode};
 
 #[derive(Debug, Clone)]
 pub struct Publish {
@@ -18,7 +18,7 @@ pub struct Publish {
 }
 
 impl Publish {
-    pub fn decode(flags: u8, r: &mut Reader) -> Result<Publish> {
+    pub fn decode(flags: u8, r: &mut Reader, version: ProtocolVersion) -> Result<Publish> {
         let dup = flags & 0x08 != 0;
         let qos = QoS::from_u8((flags & 0x06) >> 1)?;
         let retain = flags & 0x01 != 0;
@@ -38,7 +38,11 @@ impl Publish {
             }
             Some(id)
         };
-        let properties = Properties::decode(r)?;
+        let properties = if version.has_properties() {
+            Properties::decode(r)?
+        } else {
+            Properties::new()
+        };
         let payload = r.rest().to_vec();
 
         Ok(Publish {
@@ -64,7 +68,7 @@ impl Publish {
         f
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         let mut w = Writer::new();
         w.put_utf8(&self.topic);
         if self.qos != QoS::AtMostOnce {
@@ -73,7 +77,9 @@ impl Publish {
                 .ok_or_else(|| malformed("QoS>0 PUBLISH missing packet id"))?;
             w.put_u16(id);
         }
-        self.properties.encode(&mut w)?;
+        if version.has_properties() {
+            self.properties.encode(&mut w)?;
+        }
         w.put_bytes(&self.payload);
         Ok(w.into_vec())
     }
@@ -123,10 +129,14 @@ impl PubAck {
         })
     }
 
-    pub fn encode_body(&self) -> Result<Vec<u8>> {
+    pub fn encode_body(&self, version: ProtocolVersion) -> Result<Vec<u8>> {
         let mut w = Writer::new();
         w.put_u16(self.packet_id);
-        // Omit trailing fields when Reason Code is Success and no properties.
+        // v3.x carries only the Packet Identifier (no Reason Code / properties).
+        if !version.is_v5() {
+            return Ok(w.into_vec());
+        }
+        // v5: omit trailing fields when Reason Code is Success and no properties.
         if self.reason_code == ReasonCode::Success && self.properties.is_empty() {
             return Ok(w.into_vec());
         }
