@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target
+
+# SQLite databases (runtime state) and WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# Windows "mark of the web" alternate-data-stream artifacts
+*:Zone.Identifier
