@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use tokio::net::TcpStream;
 
-use mqtt_server::broker::Broker;
-use mqtt_server::codec::Properties;
-use mqtt_server::config::Config;
-use mqtt_server::framing::{read_packet, write_packet, ReadOutcome};
-use mqtt_server::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use mqtt_server::storage::Storage;
-use mqtt_server::types::{ProtocolVersion::V5, QoS, ReasonCode};
+use pulsemq::broker::Broker;
+use pulsemq::codec::Properties;
+use pulsemq::config::Config;
+use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
+use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use pulsemq::storage::Storage;
+use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
 /// Start a broker on an ephemeral loopback port and return its address.
 async fn start_broker() -> String {
@@ -28,11 +28,11 @@ async fn start_broker() -> String {
         config,
         Storage::null(),
         Default::default(),
-        mqtt_server::acl::Acl::permit_all(),
+        pulsemq::acl::Acl::permit_all(),
         None,
     );
     tokio::spawn(async move {
-        let _ = mqtt_server::server::run(broker).await;
+        let _ = pulsemq::server::run(broker).await;
     });
     // Give the listener a moment to bind.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -91,7 +91,7 @@ async fn qos1_publish_is_routed_to_subscriber() {
             qos: QoS::AtLeastOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: mqtt_server::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(&mut sub, &subscribe, V5).await.unwrap();
@@ -163,7 +163,7 @@ async fn retained_message_delivered_on_subscribe() {
             qos: QoS::AtMostOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: mqtt_server::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(&mut sub, &subscribe, V5).await.unwrap();

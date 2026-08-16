@@ -1,6 +1,6 @@
-# Example mqtt_server configuration.
+# Example pulsemq configuration.
 #
-# Copy to `mqtt_server.yaml` (auto-loaded from the working directory) or point
+# Copy to `pulsemq.yaml` (auto-loaded from the working directory) or point
 # at it with `--config <FILE>` / MQTT_CONFIG_FILE. Every key is optional and
 # corresponds to a CLI flag / environment variable. Precedence, lowest to
 # highest: this file < environment variables < command-line flags.
@@ -30,7 +30,7 @@ admin_addr: "127.0.0.1:9001"
 # acl_path: "acl.json"               # per-identity publish/subscribe ACL (SIGHUP reloads)
 #
 # Generate a password_file entry (password read from stdin):
-#   mqtt_server --hash-password alice >> passwd
+#   pulsemq --hash-password alice >> passwd
 
 # --- Storage & limits ---
 db_path: "mqtt_broker.db"

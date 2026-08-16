@@ -4,14 +4,14 @@
 //! then command-line flags (see `config::Config`). State is persisted to
 //! SQLite and reloaded on startup.
 
-use mqtt_server::acl::Acl;
-use mqtt_server::admin;
-use mqtt_server::auth::{self, Credentials};
-use mqtt_server::broker::Broker;
-use mqtt_server::config::{Config, Startup};
-use mqtt_server::error::Result;
-use mqtt_server::server;
-use mqtt_server::storage::Storage;
+use pulsemq::acl::Acl;
+use pulsemq::admin;
+use pulsemq::auth::{self, Credentials};
+use pulsemq::broker::Broker;
+use pulsemq::config::{Config, Startup};
+use pulsemq::error::Result;
+use pulsemq::server;
+use pulsemq::storage::Storage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -164,7 +164,7 @@ fn hash_password_cmd(username: Option<&str>) -> Result<()> {
             let mut buf = String::new();
             std::io::stdin()
                 .read_to_string(&mut buf)
-                .map_err(mqtt_server::error::MqttError::Io)?;
+                .map_err(pulsemq::error::MqttError::Io)?;
             buf.trim_end_matches(['\r', '\n']).to_string()
         }
     };

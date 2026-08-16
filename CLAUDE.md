@@ -6,9 +6,9 @@ Guidance for working in this repository.
 
 An **MQTT broker** in Rust (protocols **v5.0**, **v3.1.1**, **v3.1**), built
 from the OASIS specs (in `spec/`). Async networking via **Tokio**; durable state
-in **SQLite** (bundled via `rusqlite`). Single binary `mqtt_server` plus a
+in **SQLite** (bundled via `rusqlite`). Single binary `pulsemq` plus a
 library crate. Transports: TCP, TLS, mutual TLS, WebSockets, WebSockets-over-TLS.
-Repo: https://github.com/elpapimango/mqtt_server
+Repo: https://github.com/elpapimango/pulsemq
 
 ## Commands
 
@@ -90,11 +90,11 @@ ACL (`--acl-file`), which is `RwLock<Arc<Acl>>` and hot-reloaded on SIGHUP
 ## Configuration
 
 Precedence, lowest to highest: **defaults < YAML config file < env vars < CLI
-flags**. Entry point is `Config::load()`. `mqtt_server.yaml`/`.yml` in the cwd is
+flags**. Entry point is `Config::load()`. `pulsemq.yaml`/`.yml` in the cwd is
 auto-loaded; `--config` / `MQTT_CONFIG_FILE` overrides. When adding a new option,
 wire it in **all** places: the `Config` struct + `Default`, `apply_env`,
 `apply_args` (+ `HELP` text), `apply_yaml_str` (+ `KNOWN_YAML_KEYS`), the README
-tables, and `mqtt_server.example.yaml`. There are unit tests in `config` covering
+tables, and `pulsemq.example.yaml`. There are unit tests in `config` covering
 each layer — extend them.
 
 ## Tests
@@ -111,8 +111,8 @@ each layer — extend them.
 - **zsh does not word-split unquoted variables.** For `mosquitto_pub/sub` flags
   use an array: `CERT=(--cafile ca.pem --cert c.pem --key k.pem -V 5)` then
   `mosquitto_sub "${CERT[@]}" ...`.
-- **Do not `pkill -f release/mqtt_server`** — the pattern matches the shell
-  running pkill and kills it (seen as exit 144). Use `killall mqtt_server`.
+- **Do not `pkill -f release/pulsemq`** — the pattern matches the shell
+  running pkill and kills it (seen as exit 144). Use `killall pulsemq`.
 - `mosquitto_pub/sub` cannot speak WebSockets — use the Rust WS integration tests.
 - Put temporary files in the session scratchpad, not the repo.
 - TLS pins the rustls **ring** provider explicitly (`tls.rs`); don't rely on a
@@ -123,7 +123,7 @@ each layer — extend them.
 Multi-stage `Dockerfile` (cached release build → `debian-slim` runtime, non-root
 uid 10001, state on `/data`, HEALTHCHECK on `/health`). `docker-compose.yml` is
 an example. `.github/workflows/docker.yml` builds and pushes to
-`ghcr.io/elpapimango/mqtt_server` on pushes to `main` and `v*` tags. There are
+`ghcr.io/elpapimango/pulsemq` on pushes to `main` and `v*` tags. There are
 two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml` (image).
 
 ## Conventions
@@ -131,9 +131,9 @@ two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml` (image).
 - Keep the dependency surface small and justified; prefer std + the existing crates.
 - When adding a config option, wire it through Config + Default, `apply_env`,
   `apply_args` (+ HELP), `apply_yaml_str` (+ `KNOWN_YAML_KEYS`), README, and
-  `mqtt_server.example.yaml` — with tests. (See the Configuration checklist.)
+  `pulsemq.example.yaml` — with tests. (See the Configuration checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
-- Real `mqtt_server.yaml` and `*.db` files are gitignored (may hold secrets/state);
-  the tracked template is `mqtt_server.example.yaml`.
+- Real `pulsemq.yaml` and `*.db` files are gitignored (may hold secrets/state);
+  the tracked template is `pulsemq.example.yaml`.

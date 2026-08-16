@@ -13,12 +13,12 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use mqtt_server::broker::Broker;
-use mqtt_server::codec::Properties;
-use mqtt_server::config::Config;
-use mqtt_server::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
-use mqtt_server::storage::Storage;
-use mqtt_server::types::{ProtocolVersion, QoS, ReasonCode};
+use pulsemq::broker::Broker;
+use pulsemq::codec::Properties;
+use pulsemq::config::Config;
+use pulsemq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
+use pulsemq::storage::Storage;
+use pulsemq::types::{ProtocolVersion, QoS, ReasonCode};
 
 /// Reserve an ephemeral loopback port and return its address.
 fn free_addr() -> std::net::SocketAddr {
@@ -113,12 +113,12 @@ async fn start_ws_broker(config: Config) -> Broker {
         config,
         Storage::null(),
         Default::default(),
-        mqtt_server::acl::Acl::permit_all(),
+        pulsemq::acl::Acl::permit_all(),
         None,
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = mqtt_server::server::run_ws(b).await;
+        let _ = pulsemq::server::run_ws(b).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
     broker

@@ -7,8 +7,8 @@
 *.db
 *.db-wal
 *.db-shm
-mqtt_server.yaml
-mqtt_server.yml
+pulsemq.yaml
+pulsemq.yml
 spec/
 
 # Editor / OS cruft

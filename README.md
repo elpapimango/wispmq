@@ -1,8 +1,8 @@
-# mqtt_server
+# PulseMQ
 
-[![CI](https://github.com/elpapimango/mqtt_server/actions/workflows/ci.yml/badge.svg)](https://github.com/elpapimango/mqtt_server/actions/workflows/ci.yml)
-[![Docker](https://github.com/elpapimango/mqtt_server/actions/workflows/docker.yml/badge.svg)](https://github.com/elpapimango/mqtt_server/actions/workflows/docker.yml)
-[![Container image](https://img.shields.io/badge/ghcr.io-mqtt__server-2496ed?logo=docker&logoColor=white)](https://github.com/elpapimango/mqtt_server/pkgs/container/mqtt_server)
+[![CI](https://github.com/elpapimango/pulsemq/actions/workflows/ci.yml/badge.svg)](https://github.com/elpapimango/pulsemq/actions/workflows/ci.yml)
+[![Docker](https://github.com/elpapimango/pulsemq/actions/workflows/docker.yml/badge.svg)](https://github.com/elpapimango/pulsemq/actions/workflows/docker.yml)
+[![Container image](https://img.shields.io/badge/ghcr.io-pulsemq-2496ed?logo=docker&logoColor=white)](https://github.com/elpapimango/pulsemq/pkgs/container/pulsemq)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 An **MQTT broker** written in Rust, built directly from the
@@ -76,7 +76,7 @@ path.
 
 ```bash
 cargo build --release
-./target/release/mqtt_server
+./target/release/pulsemq
 ```
 
 The broker listens for MQTT on `0.0.0.0:1883` by default, serves the admin
@@ -91,7 +91,7 @@ A published image is available from the GitHub Container Registry:
 docker run -d --name mqtt \
   -p 1883:1883 -p 9001:9001 \
   -v mqtt-data:/data \
-  ghcr.io/elpapimango/mqtt_server:latest
+  ghcr.io/elpapimango/pulsemq:latest
 ```
 
 Or with Compose (see [`docker-compose.yml`](docker-compose.yml)):
@@ -105,7 +105,7 @@ volume, exposes `1883` (MQTT), `8883` (TLS), `8080` (WebSockets) and `9001`
 (admin), and has a `HEALTHCHECK` against `/health`. Configure it with the same
 environment variables described below (mount certs / password / ACL / YAML
 files into the container, e.g. under `/config`). Build locally with
-`docker build -t mqtt_server .`.
+`docker build -t pulsemq .`.
 
 ## Configuration
 
@@ -117,14 +117,14 @@ increasing precedence:
 defaults  <  config file  <  environment variables  <  command-line flags
 ```
 
-The config file is discovered automatically: if `mqtt_server.yaml` (or
-`mqtt_server.yml`) exists in the working directory it is loaded. A different
+The config file is discovered automatically: if `pulsemq.yaml` (or
+`pulsemq.yml`) exists in the working directory it is loaded. A different
 path can be given with `--config <FILE>` or `MQTT_CONFIG_FILE`; an explicitly
 named file that is missing or invalid is a startup error. Unknown keys and
 wrong value types are rejected.
 
 YAML keys are the option names with underscores (e.g. `listen_addr`). Example
-[`mqtt_server.example.yaml`](mqtt_server.example.yaml):
+[`pulsemq.example.yaml`](pulsemq.example.yaml):
 
 ```yaml
 listen_addr: "0.0.0.0:1883"
@@ -157,7 +157,7 @@ Every setting is also available as a command-line flag and an environment
 variable. Run `--help` for the full list:
 
 ```bash
-./target/release/mqtt_server --help
+./target/release/pulsemq --help
 ```
 
 ```
@@ -221,7 +221,7 @@ probes work without credentials. When the variable is unset the endpoints are
 unauthenticated and the broker logs a warning at startup.
 
 ```bash
-MQTT_ADMIN_TOKEN=s3cr3t ./target/release/mqtt_server
+MQTT_ADMIN_TOKEN=s3cr3t ./target/release/pulsemq
 # then:
 curl -H 'Authorization: Bearer s3cr3t' http://127.0.0.1:9001/metrics
 ```
@@ -289,7 +289,7 @@ implemented; a `GET /mcp` returns 405.)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MQTT_CONFIG_FILE` | _(auto)_ | YAML config file path (else `mqtt_server.yaml` in cwd) |
+| `MQTT_CONFIG_FILE` | _(auto)_ | YAML config file path (else `pulsemq.yaml` in cwd) |
 | `MQTT_LISTEN_ADDR` | `0.0.0.0:1883` | MQTT listener bind address |
 | `MQTT_TLS_CERT` / `MQTT_TLS_KEY` | _(unset)_ | PEM cert + key; both set = TLS on the MQTT port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
@@ -336,10 +336,10 @@ and v5** clients interchangeably (the version is negotiated per connection).
 
 ```bash
 # Plain MQTT on 1883 and MQTT-over-WebSockets on 8080, together:
-./target/release/mqtt_server --listen-addr 0.0.0.0:1883 --ws-listen-addr 0.0.0.0:8080
+./target/release/pulsemq --listen-addr 0.0.0.0:1883 --ws-listen-addr 0.0.0.0:8080
 
 # WebSockets over TLS (wss):
-./target/release/mqtt_server \
+./target/release/pulsemq \
   --ws-listen-addr 0.0.0.0:8443 --ws-tls-cert cert.pem --ws-tls-key key.pem
 ```
 
@@ -359,7 +359,7 @@ MQTT_LISTEN_ADDR=0.0.0.0:8883 \
 MQTT_TLS_CERT=cert.pem  MQTT_TLS_KEY=key.pem \
 MQTT_ADMIN_ADDR=0.0.0.0:9443 \
 MQTT_ADMIN_TLS_CERT=cert.pem  MQTT_ADMIN_TLS_KEY=key.pem \
-./target/release/mqtt_server
+./target/release/pulsemq
 ```
 
 ```bash
@@ -384,7 +384,7 @@ certificate that chains to a CA in that store, or the TLS handshake is refused.
 openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 365 -subj "/CN=My-CA"
 # ... sign server.pem (with SANs) and client.pem against ca.pem ...
 
-./target/release/mqtt_server \
+./target/release/pulsemq \
   --listen-addr 0.0.0.0:8883 \
   --tls-cert server.pem --tls-key server.key --tls-client-ca ca.pem \
   --admin-addr 0.0.0.0:9443 \
@@ -414,7 +414,7 @@ username/password authentication on CONNECT. Passwords are stored as
 constant-time. Generate an entry (password read from stdin):
 
 ```bash
-mqtt_server --hash-password alice >> passwd     # prompts for the password
+pulsemq --hash-password alice >> passwd     # prompts for the password
 ```
 
 Each line is `username:pbkdf2_sha256$iterations$salt$hash`. When a password file
@@ -485,7 +485,7 @@ error is logged and the **previous policy is kept**.
 
 ```bash
 # edit acl.json, then:
-kill -HUP "$(pgrep -f target/release/mqtt_server)"
+kill -HUP "$(pgrep -f target/release/pulsemq)"
 ```
 
 Reloading is a no-op (logged) when no `--acl-file` was configured.

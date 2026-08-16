@@ -10,5 +10,5 @@
 *:Zone.Identifier
 
 # Local config (may hold secrets); the tracked template is *.example.yaml
-mqtt_server.yaml
-mqtt_server.yml
+pulsemq.yaml
+pulsemq.yml

@@ -37,7 +37,7 @@ const KNOWN_YAML_KEYS: &[&str] = &[
 ];
 
 /// Default config-file names looked for in the working directory.
-const DEFAULT_CONFIG_FILES: &[&str] = &["mqtt_server.yaml", "mqtt_server.yml"];
+const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.yaml", "pulsemq.yml"];
 
 /// Crate version, surfaced by `--version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -260,7 +260,7 @@ impl Config {
                     return Ok(Startup::Exit);
                 }
                 "-V" | "--version" => {
-                    println!("mqtt_server {VERSION}");
+                    println!("pulsemq {VERSION}");
                     return Ok(Startup::Exit);
                 }
                 _ => {}
@@ -509,10 +509,10 @@ pub enum Startup {
 
 /// `--help` text. Kept in sync with the option table below.
 pub const HELP: &str = "\
-mqtt_server — an MQTT v5.0 broker (Tokio + SQLite)
+PulseMQ — an MQTT v5.0 / v3.1.1 / v3.1 broker (Tokio + SQLite)
 
 USAGE:
-    mqtt_server [OPTIONS]
+    pulsemq [OPTIONS]
 
 Every option can also be set via the environment variable shown in brackets, or
 in a YAML config file (key = the option name with underscores, e.g. listen_addr).
@@ -520,7 +520,7 @@ Precedence, lowest to highest: config file < environment < command-line flags.
 
 CONFIG FILE:
     --config <FILE>               Load this YAML config file [MQTT_CONFIG_FILE].
-                                  If omitted, mqtt_server.yaml (or .yml) in the
+                                  If omitted, pulsemq.yaml (or .yml) in the
                                   working directory is used when present.
 
 NETWORK:
@@ -619,7 +619,7 @@ impl Config {
                     return Ok(Startup::Exit);
                 }
                 "-V" | "--version" => {
-                    println!("mqtt_server {VERSION}");
+                    println!("pulsemq {VERSION}");
                     return Ok(Startup::Exit);
                 }
                 // Already resolved before env/args were applied; consume value.

@@ -15,7 +15,7 @@ RUN mkdir src \
 COPY . .
 # Bust the cached crate build so the real sources are compiled.
 RUN touch src/main.rs src/lib.rs \
-    && cargo build --release --locked --bin mqtt_server
+    && cargo build --release --locked --bin pulsemq
 
 # ---- Runtime stage ----
 FROM debian:bookworm-slim AS runtime
@@ -24,7 +24,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 10001 -M -s /usr/sbin/nologin mqtt
 
-COPY --from=builder /app/target/release/mqtt_server /usr/local/bin/mqtt_server
+COPY --from=builder /app/target/release/pulsemq /usr/local/bin/pulsemq
 
 # Persistent state (SQLite DB) lives here.
 WORKDIR /data
@@ -45,4 +45,4 @@ USER 10001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -fsS http://127.0.0.1:9001/health || exit 1
 
-ENTRYPOINT ["mqtt_server"]
+ENTRYPOINT ["pulsemq"]
