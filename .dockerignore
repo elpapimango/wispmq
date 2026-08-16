@@ -1,0 +1,15 @@
+# Build artifacts and VCS
+/target
+.git
+.github
+
+# Local state, config with possible secrets, and large docs
+*.db
+*.db-wal
+*.db-shm
+mqtt_server.yaml
+mqtt_server.yml
+spec/
+
+# Editor / OS cruft
+*:Zone.Identifier

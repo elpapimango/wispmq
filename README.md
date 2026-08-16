@@ -72,6 +72,30 @@ The broker listens for MQTT on `0.0.0.0:1883` by default, serves the admin
 HTTP endpoints on `127.0.0.1:9001`, and writes state to `mqtt_broker.db` in the
 working directory.
 
+## Docker
+
+A published image is available from the GitHub Container Registry:
+
+```bash
+docker run -d --name mqtt \
+  -p 1883:1883 -p 9001:9001 \
+  -v mqtt-data:/data \
+  ghcr.io/elpapimango/mqtt_server:latest
+```
+
+Or with Compose (see [`docker-compose.yml`](docker-compose.yml)):
+
+```bash
+docker compose up -d
+```
+
+The image runs as a non-root user, stores its SQLite state in the `/data`
+volume, exposes `1883` (MQTT), `8883` (TLS), `8080` (WebSockets) and `9001`
+(admin), and has a `HEALTHCHECK` against `/health`. Configure it with the same
+environment variables described below (mount certs / password / ACL / YAML
+files into the container, e.g. under `/config`). Build locally with
+`docker build -t mqtt_server .`.
+
 ## Configuration
 
 Every setting can be provided three ways — a **YAML config file**, an
