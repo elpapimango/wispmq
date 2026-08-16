@@ -4,10 +4,11 @@ Guidance for working in this repository.
 
 ## Project
 
-An **MQTT v5.0 broker** in Rust, built from the OASIS spec (in `spec/`). Async
-networking via **Tokio**; durable state in **SQLite** (bundled via `rusqlite`).
-Single binary `mqtt_server` plus a library crate. Repo:
-https://github.com/elpapimango/mqtt_server
+An **MQTT broker** in Rust (protocols **v5.0**, **v3.1.1**, **v3.1**), built
+from the OASIS specs (in `spec/`). Async networking via **Tokio**; durable state
+in **SQLite** (bundled via `rusqlite`). Single binary `mqtt_server` plus a
+library crate. Transports: TCP, TLS, mutual TLS, WebSockets, WebSockets-over-TLS.
+Repo: https://github.com/elpapimango/mqtt_server
 
 ## Commands
 
@@ -42,6 +43,7 @@ before changing it.
 - `server` — TCP/TLS listeners and the generic per-connection task
 - `ws` — WebSocket transport: `mqtt`-subprotocol handshake + byte-stream adapter (§6)
 - `tls` — rustls `TlsAcceptor` from PEM cert/key; client-cert CN extraction
+- `auth` — username/password credentials (PBKDF2-HMAC-SHA256 via `ring`)
 - `acl` — per-identity publish/subscribe authorization (JSON policy)
 - `metrics` — atomic counters + Prometheus/JSON snapshot
 - `admin` — HTTP server: `/health`, Prometheus `/metrics`, MCP `/mcp`
@@ -66,6 +68,24 @@ Plain TCP, TLS, mutual TLS (all on `--listen-addr`), plus WebSockets and
 WebSockets-over-TLS (on `--ws-listen-addr`). Both ports can run at once and share
 the session/routing core. Client-cert CN becomes the authenticated identity for
 ACLs on any TLS transport.
+
+### Protocol versions
+
+The version is negotiated per-connection in CONNECT and threaded as a
+`ProtocolVersion` (`types.rs`) through `Packet::encode/decode`, `framing`, and
+the connection task. v3.x has no Properties, uses 1-byte CONNACK return codes,
+omits reason codes in (un)subscribe acks, and has no server DISCONNECT — all
+handled by branching in the per-packet `encode_body`/`decode`. **When changing
+packet codecs, keep all three versions correct** and update the version-aware
+integration tests. CONNECT is self-describing (decoded with a placeholder
+version); everything after uses the negotiated one.
+
+### Authn / authz pipeline
+
+Identity = authenticated username (`--password-file`, PBKDF2 in `auth`) if
+present, else mutual-TLS cert CN, else `anonymous`. That identity drives the
+ACL (`--acl-file`), which is `RwLock<Arc<Acl>>` and hot-reloaded on SIGHUP
+(revoking live subscriptions + disconnecting affected clients with 0x87).
 
 ## Configuration
 
@@ -98,9 +118,20 @@ each layer — extend them.
 - TLS pins the rustls **ring** provider explicitly (`tls.rs`); don't rely on a
   process-default crypto provider.
 
+## Docker
+
+Multi-stage `Dockerfile` (cached release build → `debian-slim` runtime, non-root
+uid 10001, state on `/data`, HEALTHCHECK on `/health`). `docker-compose.yml` is
+an example. `.github/workflows/docker.yml` builds and pushes to
+`ghcr.io/elpapimango/mqtt_server` on pushes to `main` and `v*` tags. There are
+two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml` (image).
+
 ## Conventions
 
 - Keep the dependency surface small and justified; prefer std + the existing crates.
+- When adding a config option, wire it through Config + Default, `apply_env`,
+  `apply_args` (+ HELP), `apply_yaml_str` (+ `KNOWN_YAML_KEYS`), README, and
+  `mqtt_server.example.yaml` — with tests. (See the Configuration checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
