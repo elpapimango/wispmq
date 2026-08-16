@@ -51,3 +51,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Push a single image manifest per tag (no attestation/SBOM child
+          # manifests), keeping the GHCR package free of untagged versions.
+          provenance: false
