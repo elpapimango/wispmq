@@ -131,7 +131,10 @@ impl Config {
 
 /// Read an environment variable, returning `None` when unset or blank.
 fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Outcome of parsing the command line.
@@ -282,11 +285,21 @@ mod tests {
 
     #[test]
     fn cli_overrides_and_parses() {
-        let args: Vec<String> = ["--listen-addr", "127.0.0.1:1", "--receive-maximum", "10",
-            "--tls-cert", "c.pem", "--tls-key", "k.pem", "--tls-client-ca", "ca.pem"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let args: Vec<String> = [
+            "--listen-addr",
+            "127.0.0.1:1",
+            "--receive-maximum",
+            "10",
+            "--tls-cert",
+            "c.pem",
+            "--tls-key",
+            "k.pem",
+            "--tls-client-ca",
+            "ca.pem",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let cfg = match Config::default().apply_args(&args).unwrap() {
             Startup::Run(c) => *c,
             Startup::Exit => panic!("unexpected exit"),

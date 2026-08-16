@@ -7,7 +7,7 @@
 
 mod session;
 
-pub use session::{Outgoing, OutTx, Session};
+pub use session::{OutTx, Outgoing, Session};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -19,10 +19,10 @@ use crate::acl::Acl;
 use crate::config::Config;
 use crate::message::Message;
 use crate::metrics::{Metrics, Snapshot};
+use crate::packet::Packet;
 use crate::packet::{
     Connack, Connect, Disconnect, PubAck, Publish, RetainHandling, SubAck, Subscribe, Unsubscribe,
 };
-use crate::packet::Packet;
 use crate::storage::{LoadedState, Storage, SubRecord};
 use crate::topic;
 use crate::types::{QoS, ReasonCode};
@@ -209,7 +209,9 @@ impl Broker {
                         Some(s) => format!("$share/{s}/{filter}"),
                         None => filter.clone(),
                     };
-                    self.inner.storage.delete_subscription(client_id.clone(), key);
+                    self.inner
+                        .storage
+                        .delete_subscription(client_id.clone(), key);
                 }
             }
 
@@ -462,10 +464,9 @@ impl Broker {
                 Action::Continue
             }
             // Packets only ever sent Server->Client are illegal from a client.
-            Packet::Connack(_)
-            | Packet::Suback(_)
-            | Packet::Unsuback(_)
-            | Packet::Pingresp => Action::ServerDisconnect(ReasonCode::ProtocolError),
+            Packet::Connack(_) | Packet::Suback(_) | Packet::Unsuback(_) | Packet::Pingresp => {
+                Action::ServerDisconnect(ReasonCode::ProtocolError)
+            }
         }
     }
 
@@ -511,9 +512,7 @@ impl Broker {
                     None => return Action::ServerDisconnect(ReasonCode::TopicAliasInvalid),
                 }
             } else {
-                session
-                    .inbound_aliases
-                    .insert(alias, publish.topic.clone());
+                session.inbound_aliases.insert(alias, publish.topic.clone());
             }
         }
 
@@ -526,10 +525,7 @@ impl Broker {
         // acknowledged with Not authorized and neither routed nor retained.
         let acl = self.acl();
         if acl.is_enforced() {
-            let who = st
-                .sessions
-                .get(client_id)
-                .and_then(|s| s.identity.clone());
+            let who = st.sessions.get(client_id).and_then(|s| s.identity.clone());
             let who = who.as_deref().unwrap_or(ANONYMOUS);
             if !acl.can_publish(who, &publish.topic) {
                 tracing::debug!(
@@ -589,7 +585,11 @@ impl Broker {
                     ReasonCode::NoMatchingSubscribers
                 };
                 let id = publish.packet_id.unwrap_or(0);
-                send_to(&st, client_id, Outgoing::Control(Box::new(Packet::Puback(PubAck::new(id, rc)))));
+                send_to(
+                    &st,
+                    client_id,
+                    Outgoing::Control(Box::new(Packet::Puback(PubAck::new(id, rc)))),
+                );
                 Action::Continue
             }
             QoS::ExactlyOnce => {
@@ -611,7 +611,11 @@ impl Broker {
                         ReasonCode::NoMatchingSubscribers
                     }
                 };
-                send_to(&st, client_id, Outgoing::Control(Box::new(Packet::Pubrec(PubAck::new(id, rc)))));
+                send_to(
+                    &st,
+                    client_id,
+                    Outgoing::Control(Box::new(Packet::Pubrec(PubAck::new(id, rc)))),
+                );
                 Action::Continue
             }
         }
@@ -785,7 +789,11 @@ impl Broker {
 
         // SUBACK first (3.8.4), then retained deliveries.
         let suback = SubAck::new(sub.packet_id, reason_codes);
-        send_to(&st, client_id, Outgoing::Control(Box::new(Packet::Suback(suback))));
+        send_to(
+            &st,
+            client_id,
+            Outgoing::Control(Box::new(Packet::Suback(suback))),
+        );
 
         for (msg, eff_qos, ids) in retained_to_send {
             if let Some(session) = st.sessions.get_mut(client_id) {
@@ -824,7 +832,11 @@ impl Broker {
             });
         }
         let unsuback = SubAck::new(unsub.packet_id, reason_codes);
-        send_to(&st, client_id, Outgoing::Control(Box::new(Packet::Unsuback(unsuback))));
+        send_to(
+            &st,
+            client_id,
+            Outgoing::Control(Box::new(Packet::Unsuback(unsuback))),
+        );
         Action::Continue
     }
 
@@ -995,7 +1007,11 @@ impl Broker {
                         .push(Plan {
                             client_id: cid.clone(),
                             qos: eff,
-                            retain: if sub.retain_as_published { message.retain } else { false },
+                            retain: if sub.retain_as_published {
+                                message.retain
+                            } else {
+                                false
+                            },
                             sub_ids: ids,
                         });
                     continue;
@@ -1132,10 +1148,12 @@ fn flush_queue(session: &mut Session) {
             session.queue.push_front(pending);
             break;
         };
-        let publish =
-            pending
-                .message
-                .to_publish(pending.qos, Some(id), pending.retain, &pending.subscription_ids);
+        let publish = pending.message.to_publish(
+            pending.qos,
+            Some(id),
+            pending.retain,
+            &pending.subscription_ids,
+        );
         match pending.qos {
             QoS::AtLeastOnce => {
                 session.awaiting_puback.insert(id, publish.clone());

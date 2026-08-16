@@ -35,12 +35,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub async fn run(broker: Broker) -> Result<()> {
     let addr = broker.config().listen_addr;
     let cfg = broker.config();
-    let acceptor = crate::tls::maybe_acceptor(
-        &cfg.tls_cert,
-        &cfg.tls_key,
-        &cfg.tls_client_ca,
-        "mqtt",
-    )?;
+    let acceptor =
+        crate::tls::maybe_acceptor(&cfg.tls_cert, &cfg.tls_key, &cfg.tls_client_ca, "mqtt")?;
     let mode = match (acceptor.is_some(), cfg.tls_client_ca.is_some()) {
         (true, true) => " (TLS, mutual: client certificate required)",
         (true, false) => " (TLS)",

@@ -147,7 +147,10 @@ impl Packet {
             }
             PacketType::Disconnect => {
                 check_flags(flags, 0, "DISCONNECT")?;
-                Ok(Packet::Disconnect(Disconnect::decode(&mut body, remaining_len)?))
+                Ok(Packet::Disconnect(Disconnect::decode(
+                    &mut body,
+                    remaining_len,
+                )?))
             }
             PacketType::Auth => {
                 check_flags(flags, 0, "AUTH")?;

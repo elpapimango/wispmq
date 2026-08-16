@@ -28,9 +28,7 @@ where
     // First byte of the fixed header.
     let first = match stream.read_u8().await {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Ok(ReadOutcome::Eof)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(ReadOutcome::Eof),
         Err(e) => return Err(MqttError::Io(e)),
     };
 

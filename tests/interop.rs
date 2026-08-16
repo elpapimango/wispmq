@@ -6,10 +6,10 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 
 use mqtt_server::broker::Broker;
+use mqtt_server::codec::Properties;
 use mqtt_server::config::Config;
 use mqtt_server::framing::{read_packet, write_packet, ReadOutcome};
 use mqtt_server::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use mqtt_server::codec::Properties;
 use mqtt_server::storage::Storage;
 use mqtt_server::types::{QoS, ReasonCode};
 
@@ -20,8 +20,10 @@ async fn start_broker() -> String {
     let addr = listener.local_addr().unwrap();
     drop(listener);
 
-    let mut config = Config::default();
-    config.listen_addr = addr;
+    let config = Config {
+        listen_addr: addr,
+        ..Config::default()
+    };
     let broker = Broker::new(
         config,
         Storage::null(),

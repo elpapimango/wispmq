@@ -3,6 +3,9 @@ name = "mqtt_server"
 version = "0.1.0"
 edition = "2021"
 description = "An MQTT v5.0 broker implemented in Rust with tokio and SQLite"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elpapimango/mqtt_server"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1.53", features = ["full"] }

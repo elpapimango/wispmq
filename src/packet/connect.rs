@@ -47,9 +47,7 @@ impl Connect {
 
         if !will_flag && (will_qos != QoS::AtMostOnce || will_retain) {
             // [MQTT-3.1.2-11 / -13/-15]
-            return Err(malformed(
-                "Will QoS/Retain set but Will Flag is 0",
-            ));
+            return Err(malformed("Will QoS/Retain set but Will Flag is 0"));
         }
 
         let keep_alive = r.u16()?;
@@ -74,7 +72,11 @@ impl Connect {
         };
 
         let username = if username_flag { Some(r.utf8()?) } else { None };
-        let password = if password_flag { Some(r.binary()?) } else { None };
+        let password = if password_flag {
+            Some(r.binary()?)
+        } else {
+            None
+        };
 
         Ok(Connect {
             protocol_name,

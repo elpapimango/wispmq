@@ -58,7 +58,9 @@ async fn main() -> Result<()> {
             acl
         }
         None => {
-            tracing::warn!("no ACL file configured; all clients may publish/subscribe to any topic");
+            tracing::warn!(
+                "no ACL file configured; all clients may publish/subscribe to any topic"
+            );
             Acl::permit_all()
         }
     };

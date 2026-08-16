@@ -92,7 +92,11 @@ impl Message {
             qos,
             retain,
             topic: self.topic.clone(),
-            packet_id: if qos == QoS::AtMostOnce { None } else { packet_id },
+            packet_id: if qos == QoS::AtMostOnce {
+                None
+            } else {
+                packet_id
+            },
             properties,
             payload: self.payload.clone(),
         }

@@ -4,10 +4,7 @@
 /// Validate a Topic Name used in a PUBLISH (4.7.3). Topic Names MUST NOT
 /// contain wildcards and MUST be at least one character.
 pub fn valid_topic_name(topic: &str) -> bool {
-    !topic.is_empty()
-        && !topic.contains('+')
-        && !topic.contains('#')
-        && !topic.contains('\u{0000}')
+    !topic.is_empty() && !topic.contains('+') && !topic.contains('#') && !topic.contains('\u{0000}')
 }
 
 /// Validate a Topic Filter used in a SUBSCRIBE (4.7). `#` must be the last

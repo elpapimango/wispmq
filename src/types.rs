@@ -148,7 +148,11 @@ impl PropertyId {
             0x28 => WildcardSubscriptionAvailable,
             0x29 => SubscriptionIdentifierAvailable,
             0x2A => SharedSubscriptionAvailable,
-            other => return Err(malformed(format!("unknown property identifier 0x{other:02X}"))),
+            other => {
+                return Err(malformed(format!(
+                    "unknown property identifier 0x{other:02X}"
+                )))
+            }
         })
     }
 }

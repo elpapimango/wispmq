@@ -70,7 +70,9 @@ impl Properties {
                 SubscriptionIdentifier => {
                     let v = sub.varint()?;
                     if v == 0 {
-                        return Err(malformed("Subscription Identifier of 0 is a Protocol Error"));
+                        return Err(malformed(
+                            "Subscription Identifier of 0 is a Protocol Error",
+                        ));
                     }
                     p.subscription_identifiers.push(v);
                 }

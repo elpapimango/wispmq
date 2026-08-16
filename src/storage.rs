@@ -58,13 +58,31 @@ pub struct LoadedState {
 
 /// Runtime persistence commands executed on the background thread.
 enum Command {
-    UpsertRetained { topic: String, message: Message },
-    DeleteRetained { topic: String },
-    UpsertSession { client_id: String, session_expiry: u32 },
-    DeleteSession { client_id: String },
-    UpsertSubscription { client_id: String, sub: SubRecord },
-    DeleteSubscription { client_id: String, filter: String },
-    ClearSubscriptions { client_id: String },
+    UpsertRetained {
+        topic: String,
+        message: Message,
+    },
+    DeleteRetained {
+        topic: String,
+    },
+    UpsertSession {
+        client_id: String,
+        session_expiry: u32,
+    },
+    DeleteSession {
+        client_id: String,
+    },
+    UpsertSubscription {
+        client_id: String,
+        sub: SubRecord,
+    },
+    DeleteSubscription {
+        client_id: String,
+        filter: String,
+    },
+    ClearSubscriptions {
+        client_id: String,
+    },
 }
 
 /// Handle used by the broker to persist state. Cloneable and cheap.
@@ -233,7 +251,9 @@ fn load_all(conn: &Connection) -> Result<LoadedState> {
     // Sessions with their subscriptions.
     let mut sess_stmt = conn.prepare("SELECT client_id, session_expiry FROM sessions")?;
     let sessions: Vec<(String, i64)> = sess_stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
         .collect::<rusqlite::Result<_>>()?;
     drop(sess_stmt);
 
@@ -316,7 +336,10 @@ fn apply(conn: &Connection, cmd: Command) -> rusqlite::Result<()> {
             )?;
         }
         Command::DeleteSession { client_id } => {
-            conn.execute("DELETE FROM subscriptions WHERE client_id = ?1", [&client_id])?;
+            conn.execute(
+                "DELETE FROM subscriptions WHERE client_id = ?1",
+                [&client_id],
+            )?;
             conn.execute("DELETE FROM sessions WHERE client_id = ?1", [client_id])?;
         }
         Command::UpsertSubscription { client_id, sub } => {
@@ -346,7 +369,10 @@ fn apply(conn: &Connection, cmd: Command) -> rusqlite::Result<()> {
             )?;
         }
         Command::ClearSubscriptions { client_id } => {
-            conn.execute("DELETE FROM subscriptions WHERE client_id = ?1", [client_id])?;
+            conn.execute(
+                "DELETE FROM subscriptions WHERE client_id = ?1",
+                [client_id],
+            )?;
         }
     }
     Ok(())

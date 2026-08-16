@@ -98,8 +98,8 @@ impl<'a> Reader<'a> {
     pub fn utf8(&mut self) -> Result<String> {
         let len = self.u16()? as usize;
         let raw = self.bytes(len)?;
-        let s = std::str::from_utf8(raw)
-            .map_err(|_| malformed("string is not well-formed UTF-8"))?;
+        let s =
+            std::str::from_utf8(raw).map_err(|_| malformed("string is not well-formed UTF-8"))?;
         // [MQTT-1.5.4-2] MUST NOT include U+0000.
         if s.contains('\u{0000}') {
             return Err(malformed("string contains U+0000"));

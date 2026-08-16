@@ -41,7 +41,9 @@ pub async fn run(broker: Broker) -> Result<()> {
         ""
     };
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("admin/metrics/MCP server listening on {scheme}://{addr}{mtls} (/health /metrics /mcp)");
+    tracing::info!(
+        "admin/metrics/MCP server listening on {scheme}://{addr}{mtls} (/health /metrics /mcp)"
+    );
     if broker.config().admin_token.is_some() {
         tracing::info!("admin endpoints /metrics and /mcp require a bearer token");
     } else {
@@ -160,11 +162,9 @@ fn route(broker: &Broker, req: &Request) -> (&'static str, &'static str, Vec<u8>
 
     match (req.method.as_str(), req.path.as_str()) {
         ("OPTIONS", _) => ("204 No Content", "text/plain", Vec::new()),
-        ("GET", "/health") | ("GET", "/healthz") => (
-            "200 OK",
-            "application/json",
-            br#"{"status":"ok"}"#.to_vec(),
-        ),
+        ("GET", "/health") | ("GET", "/healthz") => {
+            ("200 OK", "application/json", br#"{"status":"ok"}"#.to_vec())
+        }
         ("GET", "/metrics") => (
             "200 OK",
             "text/plain; version=0.0.4",
@@ -192,7 +192,11 @@ fn route(broker: &Broker, req: &Request) -> (&'static str, &'static str, Vec<u8>
             "text/plain",
             b"mqtt-broker admin: GET /health, GET /metrics, POST /mcp\n".to_vec(),
         ),
-        _ => ("404 Not Found", "application/json", br#"{"error":"not found"}"#.to_vec()),
+        _ => (
+            "404 Not Found",
+            "application/json",
+            br#"{"error":"not found"}"#.to_vec(),
+        ),
     }
 }
 

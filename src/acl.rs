@@ -162,7 +162,9 @@ fn parse_filters(
             .as_str()
             .ok_or_else(|| format!("rule {rule_index}: \"{field}\" entries must be strings"))?;
         if !topic::valid_topic_filter(f) {
-            return Err(format!("rule {rule_index}: invalid topic filter {f:?} in \"{field}\""));
+            return Err(format!(
+                "rule {rule_index}: invalid topic filter {f:?} in \"{field}\""
+            ));
         }
         out.push(f.to_string());
     }

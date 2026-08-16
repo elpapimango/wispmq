@@ -63,7 +63,9 @@ impl Snapshot {
     pub fn to_prometheus(&self) -> String {
         let mut o = String::with_capacity(2048);
         let mut counter = |name: &str, help: &str, val: u64| {
-            o.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n{name} {val}\n"));
+            o.push_str(&format!(
+                "# HELP {name} {help}\n# TYPE {name} counter\n{name} {val}\n"
+            ));
         };
         counter(
             "mqtt_connections_total",
@@ -102,7 +104,9 @@ impl Snapshot {
         );
 
         let mut gauge = |name: &str, help: &str, val: u64| {
-            o.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n{name} {val}\n"));
+            o.push_str(&format!(
+                "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {val}\n"
+            ));
         };
         gauge(
             "mqtt_clients_connected",
