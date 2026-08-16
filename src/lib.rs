@@ -13,6 +13,7 @@
 
 pub mod acl;
 pub mod admin;
+pub mod auth;
 pub mod broker;
 pub mod codec;
 pub mod config;

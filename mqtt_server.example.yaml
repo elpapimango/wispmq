@@ -24,8 +24,13 @@ admin_addr: "127.0.0.1:9001"
 # admin_tls_key: "certs/server.key"
 # admin_tls_client_ca: "certs/ca.pem"
 
-# --- Authorization ---
+# --- Authentication & authorization ---
+# password_file: "passwd"            # username/password credentials; when set, auth is required
+# allow_anonymous: false             # allow clients with no credentials (auth'd users still verified)
 # acl_path: "acl.json"               # per-identity publish/subscribe ACL (SIGHUP reloads)
+#
+# Generate a password_file entry (password read from stdin):
+#   mqtt_server --hash-password alice >> passwd
 
 # --- Storage & limits ---
 db_path: "mqtt_broker.db"

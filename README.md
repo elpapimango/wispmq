@@ -145,8 +145,11 @@ ADMIN TLS & AUTH:
     --admin-tls-key <FILE>        PEM private key for the admin port [MQTT_ADMIN_TLS_KEY]
     --admin-tls-client-ca <FILE>  PEM CA bundle; enables mutual TLS [MQTT_ADMIN_TLS_CLIENT_CA]
     --admin-token <TOKEN>         Bearer token for /metrics and /mcp [MQTT_ADMIN_TOKEN]
-AUTHORIZATION:
-    --acl-file <FILE>             JSON ACL policy per certificate identity [MQTT_ACL_FILE]
+AUTHENTICATION & AUTHORIZATION:
+    --password-file <FILE>        Username/password credentials [MQTT_PASSWORD_FILE]
+    --allow-anonymous <BOOL>      Allow credential-less clients [MQTT_ALLOW_ANONYMOUS]
+    --acl-file <FILE>             JSON ACL policy per identity [MQTT_ACL_FILE]
+    --hash-password [USERNAME]    Print a credential line (password from stdin) and exit
 STORAGE & LIMITS:
     --db-path <FILE>              SQLite database file [MQTT_DB_PATH]
     --max-packet-size <BYTES>     Maximum accepted packet size [MQTT_MAX_PACKET_SIZE]
@@ -263,7 +266,9 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_ADMIN_TLS_CERT` / `MQTT_ADMIN_TLS_KEY` | _(unset)_ | PEM cert + key; both set = HTTPS on the admin port |
 | `MQTT_ADMIN_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the admin port |
 | `MQTT_ADMIN_TOKEN` | _(unset)_ | Bearer token for `/metrics` and `/mcp`; unset = open |
-| `MQTT_ACL_FILE` | _(unset)_ | JSON ACL policy per certificate identity; unset = allow all |
+| `MQTT_PASSWORD_FILE` | _(unset)_ | Username/password credential file; set = auth required |
+| `MQTT_ALLOW_ANONYMOUS` | `false` | Allow credential-less clients when a password file is set |
+| `MQTT_ACL_FILE` | _(unset)_ | JSON ACL policy per identity; unset = allow all |
 | `MQTT_DB_PATH` | `mqtt_broker.db` | SQLite database file |
 | `MQTT_MAX_PACKET_SIZE` | `1048576` | Max accepted packet size (bytes) |
 | `MQTT_RECEIVE_MAXIMUM` | `64` | Server Receive Maximum |
@@ -363,12 +368,37 @@ Setting a client CA without also enabling the port's server certificate is a
 startup error. The verified certificate's Common Name becomes the client's
 authenticated **identity**, which the ACL (below) authorizes.
 
-## Authentication & authorization (ACLs)
+## Authentication & authorization
 
-With mutual TLS, the **Common Name (CN)** of the client certificate is taken as
-the connection's authenticated identity (a connection with no client
-certificate has the identity `anonymous`). That identity is logged on connect
-and drives per-client access control.
+### Username / password
+
+Point `--password-file` / `MQTT_PASSWORD_FILE` at a credential file to require
+username/password authentication on CONNECT. Passwords are stored as
+**PBKDF2-HMAC-SHA256** with a per-user random salt; verification is
+constant-time. Generate an entry (password read from stdin):
+
+```bash
+mqtt_server --hash-password alice >> passwd     # prompts for the password
+```
+
+Each line is `username:pbkdf2_sha256$iterations$salt$hash`. When a password file
+is configured, clients must present valid credentials — a bad username/password
+gets CONNACK `0x86`, and a client with no credentials gets `0x87` unless
+`--allow-anonymous` / `MQTT_ALLOW_ANONYMOUS=true` is set (in which case
+credential-less clients connect as `anonymous`, but any client that *does* send
+a username must still authenticate). The authenticated username becomes the
+identity used for ACLs (below), overriding any client-certificate CN.
+
+```bash
+mosquitto_pub -h 127.0.0.1 -p 1883 -V 5 -u alice -P s3cr3t -t t -m hi
+```
+
+### Identity & ACLs
+
+The connection's **identity** is the authenticated username if password auth is
+used, otherwise the **Common Name (CN)** of the mutual-TLS client certificate,
+otherwise `anonymous`. It is logged on connect and drives per-client access
+control.
 
 Point `--acl-file` / `MQTT_ACL_FILE` at a JSON policy to authorize publish and
 subscribe per identity. Without an ACL file every client may publish/subscribe

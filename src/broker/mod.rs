@@ -16,6 +16,7 @@ use std::time::Duration;
 use session::{Pending, Subscription};
 
 use crate::acl::Acl;
+use crate::auth::Credentials;
 use crate::config::Config;
 use crate::message::Message;
 use crate::metrics::{Metrics, Snapshot};
@@ -48,6 +49,8 @@ pub struct Accepted {
     pub epoch: u64,
     /// Effective Keep Alive in seconds (server override or client value).
     pub keep_alive: u16,
+    /// Resolved authenticated identity (username or cert CN), for logging.
+    pub identity: Option<String>,
     pub connack: Connack,
 }
 
@@ -64,6 +67,8 @@ struct Inner {
     /// Authorization policy, swappable at runtime (reloaded on SIGHUP). Readers
     /// take a cheap snapshot of the `Arc`; a reload replaces it atomically.
     acl: RwLock<Arc<Acl>>,
+    /// Username/password credentials. `None` disables password authentication.
+    auth: Option<Credentials>,
 }
 
 /// Summary of one session, for the admin/MCP surface.
@@ -96,7 +101,13 @@ struct State {
 }
 
 impl Broker {
-    pub fn new(config: Config, storage: Storage, loaded: LoadedState, acl: Acl) -> Broker {
+    pub fn new(
+        config: Config,
+        storage: Storage,
+        loaded: LoadedState,
+        acl: Acl,
+        auth: Option<Credentials>,
+    ) -> Broker {
         let mut sessions = HashMap::new();
         for rec in loaded.sessions {
             let mut s = Session::new(rec.client_id.clone(), rec.session_expiry_interval);
@@ -135,6 +146,7 @@ impl Broker {
                 }),
                 metrics: Metrics::default(),
                 acl: RwLock::new(Arc::new(acl)),
+                auth,
             }),
         }
     }
@@ -311,12 +323,37 @@ impl Broker {
         &self,
         connect: Connect,
         out: OutTx,
-        identity: Option<String>,
+        mut identity: Option<String>,
     ) -> Result<Accepted, Connack> {
         if let Err(e) = connect.validate_protocol() {
             return Err(Connack::new(false, e.reason_code()));
         }
         let cfg = &self.inner.config;
+
+        // Authentication (3.1.3.5 / 3.2.2). When a credential store is
+        // configured, verify the username/password; the authenticated username
+        // becomes the ACL identity (overriding any client-certificate CN).
+        if let Some(creds) = &self.inner.auth {
+            match (&connect.username, &connect.password) {
+                (Some(user), Some(pass)) => {
+                    if creds.verify(user, pass) {
+                        identity = Some(user.clone());
+                    } else {
+                        tracing::debug!("CONNECT authentication failed for user {user:?}");
+                        return Err(Connack::new(false, ReasonCode::BadUserNameOrPassword));
+                    }
+                }
+                (Some(_), None) => {
+                    return Err(Connack::new(false, ReasonCode::BadUserNameOrPassword));
+                }
+                (None, _) => {
+                    if !cfg.allow_anonymous {
+                        return Err(Connack::new(false, ReasonCode::NotAuthorized));
+                    }
+                    // Anonymous permitted; identity stays as the cert CN (or none).
+                }
+            }
+        }
 
         // Authorization: if a Will is present, the identity must be allowed to
         // publish to the Will Topic, otherwise reject the connection (3.2.2.2 /
@@ -380,7 +417,7 @@ impl Broker {
             .entry(client_id.clone())
             .or_insert_with(|| Session::new(client_id.clone(), requested_expiry));
         session.epoch = epoch;
-        session.identity = identity;
+        session.identity = identity.clone();
         session.session_expiry_interval = requested_expiry;
         session.persistent = requested_expiry > 0 && !assigned;
         session.out = Some(out);
@@ -435,6 +472,7 @@ impl Broker {
             client_id,
             epoch,
             keep_alive: effective_keep_alive,
+            identity,
             connack,
         })
     }

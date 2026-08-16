@@ -24,6 +24,8 @@ const KNOWN_YAML_KEYS: &[&str] = &[
     "admin_tls_key",
     "admin_tls_client_ca",
     "acl_path",
+    "password_file",
+    "allow_anonymous",
     "db_path",
     "max_packet_size",
     "receive_maximum",
@@ -77,6 +79,13 @@ pub struct Config {
     /// Path to a JSON ACL policy authorizing publish/subscribe per identity.
     /// When unset, all operations are permitted.
     pub acl_path: Option<String>,
+    /// Path to a username/password credential file. When set, clients must
+    /// authenticate (unless `allow_anonymous`). See `auth`.
+    pub password_file: Option<String>,
+    /// When a password file is set, permit clients that present no credentials
+    /// to connect as `anonymous`. A client that does present a username must
+    /// still authenticate. Ignored when no password file is configured.
+    pub allow_anonymous: bool,
     /// Path to the SQLite database file.
     pub db_path: String,
     /// Maximum packet size the server will accept (3.2.2.3.6).
@@ -115,6 +124,8 @@ impl Default for Config {
             admin_tls_key: None,
             admin_tls_client_ca: None,
             acl_path: None,
+            password_file: None,
+            allow_anonymous: false,
             db_path: "mqtt_broker.db".to_string(),
             max_packet_size: 1024 * 1024, // 1 MiB
             receive_maximum: 64,
@@ -176,6 +187,13 @@ impl Config {
             non_empty_env("MQTT_ADMIN_TLS_CLIENT_CA"),
         );
         overlay_opt(&mut self.acl_path, non_empty_env("MQTT_ACL_FILE"));
+        overlay_opt(&mut self.password_file, non_empty_env("MQTT_PASSWORD_FILE"));
+        if let Some(b) = non_empty_env("MQTT_ALLOW_ANONYMOUS")
+            .as_deref()
+            .and_then(parse_bool_value)
+        {
+            self.allow_anonymous = b;
+        }
         if let Some(v) = non_empty_env("MQTT_DB_PATH") {
             self.db_path = v;
         }
@@ -344,6 +362,12 @@ impl Config {
         }
         if let Some(v) = y_str(doc, "acl_path", source)? {
             self.acl_path = Some(v);
+        }
+        if let Some(v) = y_str(doc, "password_file", source)? {
+            self.password_file = Some(v);
+        }
+        if let Some(b) = y_bool(doc, "allow_anonymous", source)? {
+            self.allow_anonymous = b;
         }
         if let Some(v) = y_str(doc, "db_path", source)? {
             self.db_path = v;
@@ -529,10 +553,16 @@ ADMIN TLS & AUTH:
     --admin-token <TOKEN>         Bearer token required for /metrics and /mcp
                                   (unset = open) [MQTT_ADMIN_TOKEN]
 
-AUTHORIZATION:
+AUTHENTICATION & AUTHORIZATION:
+    --password-file <FILE>        Username/password credential file; when set,
+                                  clients must authenticate [MQTT_PASSWORD_FILE]
+    --allow-anonymous <BOOL>      Allow clients with no credentials when a
+                                  password file is set [MQTT_ALLOW_ANONYMOUS]
+                                  (default false)
     --acl-file <FILE>             JSON ACL policy authorizing publish/subscribe
-                                  per certificate identity (unset = allow all)
-                                  [MQTT_ACL_FILE]
+                                  per identity (unset = allow all) [MQTT_ACL_FILE]
+    --hash-password [USERNAME]    Read a password from stdin, print a credential
+                                  line, and exit (helper for --password-file)
 
 STORAGE & LIMITS:
     --db-path <FILE>              SQLite database file [MQTT_DB_PATH]
@@ -612,6 +642,10 @@ impl Config {
                 "--admin-tls-client-ca" => self.admin_tls_client_ca = Some(value(&mut i)?),
                 "--admin-token" => self.admin_token = Some(value(&mut i)?),
                 "--acl-file" => self.acl_path = Some(value(&mut i)?),
+                "--password-file" => self.password_file = Some(value(&mut i)?),
+                "--allow-anonymous" => {
+                    self.allow_anonymous = parse_bool_arg(&value(&mut i)?, "--allow-anonymous")?
+                }
                 "--db-path" => self.db_path = value(&mut i)?,
                 "--max-packet-size" => {
                     self.max_packet_size = parse_num(&value(&mut i)?, "--max-packet-size")?

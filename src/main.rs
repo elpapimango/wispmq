@@ -6,6 +6,7 @@
 
 use mqtt_server::acl::Acl;
 use mqtt_server::admin;
+use mqtt_server::auth::{self, Credentials};
 use mqtt_server::broker::Broker;
 use mqtt_server::config::{Config, Startup};
 use mqtt_server::error::Result;
@@ -14,6 +15,13 @@ use mqtt_server::storage::Storage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `--hash-password [username]`: print a credential-file line and exit.
+    let raw_args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = raw_args.iter().position(|a| a == "--hash-password") {
+        let username = raw_args.get(pos + 1).filter(|s| !s.starts_with('-'));
+        return hash_password_cmd(username.map(String::as_str));
+    }
+
     // Resolve configuration (file < env < CLI) before anything else so
     // --help/--version print cleanly and bad input fails fast without log noise.
     let config = match Config::load() {
@@ -70,7 +78,25 @@ async fn main() -> Result<()> {
         }
     };
 
-    let broker = Broker::new(config, storage, loaded, acl);
+    // Load username/password credentials. Absent => no password auth.
+    let credentials = match &config.password_file {
+        Some(path) => {
+            let creds = Credentials::load(path)?;
+            tracing::info!(
+                "loaded {} credential(s) from {path}; password authentication required{}",
+                creds.user_count(),
+                if config.allow_anonymous {
+                    " (anonymous allowed)"
+                } else {
+                    ""
+                }
+            );
+            Some(creds)
+        }
+        None => None,
+    };
+
+    let broker = Broker::new(config, storage, loaded, acl, credentials);
 
     // Admin/metrics/MCP HTTP server on its own port.
     let admin_broker = broker.clone();
@@ -124,4 +150,27 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Implements `--hash-password [username]`: hash a password (from the
+/// `MQTT_HASH_PASSWORD` env var, else read from stdin) and print a line ready to
+/// append to a `--password-file`.
+fn hash_password_cmd(username: Option<&str>) -> Result<()> {
+    use std::io::Read;
+    let password = match std::env::var("MQTT_HASH_PASSWORD") {
+        Ok(p) => p,
+        Err(_) => {
+            eprint!("Password: ");
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(mqtt_server::error::MqttError::Io)?;
+            buf.trim_end_matches(['\r', '\n']).to_string()
+        }
+    };
+    match username {
+        Some(user) => println!("{}", auth::format_entry(user, password.as_bytes())),
+        None => println!("{}", auth::hash_password(password.as_bytes())),
+    }
+    Ok(())
 }

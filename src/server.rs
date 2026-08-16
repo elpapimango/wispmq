@@ -172,7 +172,6 @@ where
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
 
-    let identity_log = identity.clone().unwrap_or_else(|| "<none>".into());
     let accepted = match broker.handle_connect(connect, tx, identity) {
         Ok(a) => a,
         Err(connack) => {
@@ -185,6 +184,7 @@ where
     let client_id = accepted.client_id.clone();
     let epoch = accepted.epoch;
     let keep_alive = accepted.keep_alive;
+    let identity_log = accepted.identity.as_deref().unwrap_or("<none>");
     tracing::info!(
         "client {client_id:?} connected from {peer} (identity={identity_log}, keep_alive={keep_alive}s)"
     );

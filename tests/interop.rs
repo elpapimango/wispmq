@@ -29,6 +29,7 @@ async fn start_broker() -> String {
         Storage::null(),
         Default::default(),
         mqtt_server::acl::Acl::permit_all(),
+        None,
     );
     tokio::spawn(async move {
         let _ = mqtt_server::server::run(broker).await;

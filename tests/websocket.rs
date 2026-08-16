@@ -109,6 +109,7 @@ async fn start_ws_broker(config: Config) -> Broker {
         Storage::null(),
         Default::default(),
         mqtt_server::acl::Acl::permit_all(),
+        None,
     );
     let b = broker.clone();
     tokio::spawn(async move {

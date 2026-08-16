@@ -496,6 +496,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "rcgen",
+ "ring",
  "rusqlite",
  "rustls-pemfile",
  "serde_json",
