@@ -78,41 +78,102 @@ bridges:
 
 ---
 
-## 2. More metrics
+## 2. More metrics — mosquitto-parity broker status ($SYS + Prometheus)
 
-Expand `metrics.rs` (counters/gauges) and the Prometheus/MCP snapshot. Current
-set: connections_total, packets_received/sent_total, bytes_received/sent_total,
-publish_received/delivered_total; gauges clients_connected, sessions_total,
-retained_messages, subscriptions_total. Keep the `mqtt_*` prefix.
+Bring broker statistics up to **mosquitto parity**, exposed **two ways**:
 
-### Candidate metrics
-- [ ] **Per-QoS publish counters**: `mqtt_publish_received_total{qos="0|1|2"}`
-      (or separate counters if avoiding labels in the hand-rolled exposition).
-- [ ] **Dropped / rejected**: publishes rejected by ACL (`0x87`), by QoS/retain
-      not-supported, malformed packets, packets-too-large, keepalive timeouts,
-      auth failures — each a counter.
-- [ ] **Queue / inflight gauges**: total queued (offline) messages and total
-      inflight QoS>0 across sessions; max/among sessions.
-- [ ] **Subscription cardinality**: distinct topic filters; shared-subscription
-      groups.
-- [ ] **Connection churn**: disconnections_total, takeovers_total,
-      current connections by transport (tcp/tls/ws) if cheap.
-- [ ] **Uptime**: process start time / `mqtt_uptime_seconds`.
-- [ ] **Message size**: total payload bytes published; consider a small manual
-      histogram (bucketed counters) for payload size — only if it stays simple.
+1. **`$SYS/broker/...` MQTT topics** — clients subscribe (e.g. `$SYS/#`) and read
+   broker status directly over MQTT, updated every `sys_interval` seconds.
+2. **Prometheus `/metrics`** — the same values as `mqtt_*` series (and reflected
+   in the MCP `broker_stats` tool).
 
-### Notes / where to touch
-- Counters live on `Metrics` (atomic) and are incremented on the hot paths in
-  `broker/mod.rs` (publish/subscribe/connect handlers) and `server.rs`
-  (packet/byte counting, keepalive timeout, disconnect). Gauges are computed at
-  scrape time in `Broker::snapshot()` under the state lock — add fields to
-  `metrics::Snapshot`, render in `to_prometheus()`, and surface in the MCP
-  `broker_stats` tool (`admin.rs`).
-- Keep the exposition format valid (HELP/TYPE lines); if adding labels, make
-  sure the text output is well-formed. There's a metrics smoke test path via
-  `/metrics` — extend coverage.
+Same underlying counters/gauges drive both surfaces — collect once, render twice.
+
+### $SYS topic publisher
+- New `sysinfo` (or extend `metrics`) module + a periodic task started from
+  `main`. Every `sys_interval` seconds it publishes the current values to
+  `$SYS/broker/...` as **retained** messages (so late subscribers get the last
+  value immediately) via a broker method (reuse `inject_publish`, source
+  `"$sys"`, or a dedicated internal publish). `$SYS/broker/version` is **static**
+  (publish once, retained).
+- Config: `sys_interval` (seconds; default 10; **0 disables** $SYS updates), wired
+  through YAML/env/CLI/README/example + the config checklist.
+- Routing: `$`-topics are already excluded from `#`/`+` at level 0
+  (`topic::matches`), so `$SYS` only reaches clients that subscribe to it
+  explicitly — good. Make sure clients are *not* allowed to publish to `$SYS/#`
+  (reject inbound publishes to `$SYS/...`).
+- ACL note: consider gating `$SYS` subscribe behind the ACL like any topic.
+
+### Counters to add (increment on the hot paths)
+Currently: connections_total, packets_received/sent_total, bytes_received/sent_
+total, publish_received/delivered_total, bridge_forwarded_{out,in}_total; gauges
+clients_connected, sessions_total, retained_messages, subscriptions_total,
+bridges_connected. Add:
+- **Per-control-packet counters, received & sent**: connect, connack, publish,
+  puback, pubrec, pubrel, pubcomp, subscribe, suback, unsubscribe, unsuback,
+  pingreq, pingresp, disconnect, auth. Increment in `server.rs` (the `send`
+  helper for sent; the read arm for received) and bridge. A `[AtomicU64; N]`
+  indexed by packet type keeps it cheap; render each as its own series/topic.
+- **messages_received / messages_sent**: total of all packet types (sum, or
+  separate counters).
+- **publish payload bytes** received / sent (distinct from total bytes).
+- **publish_dropped**: messages dropped for offline/over-quota durable clients
+  (when the offline queue is bounded — see below) + rejected (ACL/qos/retain).
+- **connections/socket count**: total socket connections accepted.
+- **clients_maximum**: high-water mark of concurrent connected clients.
+- **clients_expired**: persistent sessions removed by expiry.
+- **uptime_seconds** / process start time; `$SYS/broker/version` (static).
+
+### Gauges to add (compute in `Broker::snapshot()` under the lock)
+- **clients_total** (connected + disconnected persistent sessions),
+  **clients_disconnected** (offline persistent), **clients_connected** (have).
+- **store/messages count + bytes**: retained + queued messages, and their
+  payload bytes. **retained bytes** too.
+- **shared_subscriptions_count**; keep **subscriptions_count**.
+- **packet/out count + bytes**: total queued-for-delivery across sessions
+  (sum of session queues / inflight) — useful backpressure signal.
+
+### Load moving averages (1min / 5min / 15min) — second phase
+mosquitto's `$SYS/broker/load/...` are per-minute counts averaged over 1/5/15
+min for: connections, bytes received/sent, messages received/sent, publish
+dropped/received/sent, sockets. Implement with a 1 Hz sampler that snapshots the
+relevant counters, keeps ~15 min of per-second deltas (ring buffer) or an EWMA,
+and exposes the three windows. This is more involved — do it after the plain
+counters/gauges land. Prometheus users can also derive rates with `rate()`, so
+the `load/*` topics are mainly for $SYS parity.
+
+### `$SYS` ↔ Prometheus name map (keep the `mqtt_` prefix)
+| `$SYS/broker/…` | Prometheus |
+|---|---|
+| `bytes/received` · `bytes/sent` | `mqtt_bytes_received_total` · `mqtt_bytes_sent_total` (exist) |
+| `messages/received` · `messages/sent` | `mqtt_messages_received_total` · `mqtt_messages_sent_total` |
+| `publish/messages/received` · `/sent` · `/dropped` | `mqtt_publish_received_total` (exist) · `mqtt_publish_sent_total` · `mqtt_publish_dropped_total` |
+| `publish/bytes/received` · `/sent` | `mqtt_publish_bytes_received_total` · `mqtt_publish_bytes_sent_total` |
+| `mqtt/<packet>/{received,sent}` | `mqtt_<packet>_{received,sent}_total` |
+| `clients/connected` · `/disconnected` · `/total` · `/maximum` · `/expired` | `mqtt_clients_connected` (exist) · `mqtt_clients_disconnected` · `mqtt_clients_total` · `mqtt_clients_maximum` · `mqtt_clients_expired_total` |
+| `subscriptions/count` · `shared_subscriptions/count` | `mqtt_subscriptions_total` (exist) · `mqtt_shared_subscriptions_count` |
+| `retained messages/count` | `mqtt_retained_messages` (exist) |
+| `store/messages/count` · `/bytes` | `mqtt_store_messages_count` · `mqtt_store_messages_bytes` |
+| `connections/socket/count` | `mqtt_socket_connections_total` |
+| `connection/<name>` (bridge up/down) | `mqtt_bridges_connected` (exist) + per-bridge label/topic |
+| `version` | `mqtt_build_info{version="…"}` (static) |
+| `load/**` | derive via `rate()`; $SYS-only for parity |
+
+### Where to touch
+- `metrics.rs`: add atomics (incl. the per-packet array) + `Snapshot` fields +
+  `to_prometheus()`. `broker/mod.rs`: gauge computation in `snapshot()`; a
+  `$SYS` publish path. `server.rs`: per-packet + byte + clients_maximum counting.
+  `admin.rs`: extend `broker_stats`. `config.rs`: `sys_interval`. `main.rs`:
+  spawn the $SYS publisher.
+- Bounding the offline queue would make `publish_dropped` meaningful (currently
+  the queue is unbounded) — optional companion change.
 
 ### Acceptance criteria
-- [ ] New series appear in `/metrics` with correct HELP/TYPE and move under load.
-- [ ] `broker_stats` MCP tool reflects the new gauges/counters.
-- [ ] README metrics list updated.
+- [ ] Subscribing to `$SYS/#` returns the broker-status topics; values refresh
+      every `sys_interval` and `sys_interval: 0` disables updates.
+- [ ] `$SYS/broker/version` is retained/static; clients cannot publish to `$SYS`.
+- [ ] Equivalent `mqtt_*` series appear in `/metrics` (valid HELP/TYPE) and move
+      under load; `broker_stats` MCP tool reflects them.
+- [ ] Per-control-packet received/sent counters are correct (unit/integration
+      test), and the `$SYS`↔Prometheus values agree.
+- [ ] README metrics + $SYS sections and `pulsemq.example.yaml` updated.
