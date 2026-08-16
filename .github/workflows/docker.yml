@@ -20,6 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # QEMU is used to emulate the small target-arch runtime stage (apt/useradd);
+      # the Rust build itself is cross-compiled natively, not emulated.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -47,10 +52,12 @@ jobs:
         with:
           context: .
           push: true
+          # Multi-arch image for x86-64 servers and arm64 (e.g. Raspberry Pi).
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Push a single image manifest per tag (no attestation/SBOM child
-          # manifests), keeping the GHCR package free of untagged versions.
+          # No attestation/SBOM child manifests (the multi-arch index still has
+          # one image manifest per platform, which is expected).
           provenance: false

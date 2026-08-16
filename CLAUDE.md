@@ -56,6 +56,9 @@ No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
 WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
 SSE is not implemented (`GET /mcp` → 405).
 
+**Planned work is in [`TODO.md`](TODO.md)** — pick the top item. Currently:
+(1) message forwarding / broker-to-broker bridge, (2) more metrics.
+
 ## Commands
 
 ```bash
@@ -166,13 +169,19 @@ each layer — extend them.
 
 ## Docker
 
-Multi-stage `Dockerfile` (cached release build → `debian-slim` runtime, non-root
-uid 10001, state on `/data`, HEALTHCHECK on `/health`). `docker-compose.yml` is
-an example. `.github/workflows/docker.yml` builds and pushes to
-`ghcr.io/elpapimango/pulsemq` on pushes to `main` and `v*` tags, with
-`provenance: false` so each tag is a single image manifest (no attestation
-child manifests → no untagged versions cluttering the GHCR package). There are
-two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml` (image).
+Multi-stage `Dockerfile`: the builder is pinned to `$BUILDPLATFORM` and
+**cross-compiles** the Rust binary to `$TARGETARCH` (installs
+`gcc-aarch64-linux-gnu` + `libc6-dev-arm64-cross`, builds with `--target`), so
+the arm64 image isn't built under slow QEMU emulation — only the tiny target-arch
+runtime stage (apt/useradd) is emulated. Runtime is `debian-slim`, non-root uid
+10001, state on `/data`, HEALTHCHECK on `/health`. `docker-compose.yml` is an
+example. `.github/workflows/docker.yml` builds a **multi-arch**
+(`linux/amd64,linux/arm64`) image and pushes to `ghcr.io/elpapimango/pulsemq`
+on pushes to `main` and `v*` tags, with `provenance: false` (no attestation
+children; the multi-arch index still has one image manifest per platform, which
+is expected). Two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml`
+(image). Verify a multi-arch build locally with `docker buildx build --platform
+linux/amd64,linux/arm64 .` (needs `docker buildx` + QEMU binfmt).
 
 ## Continuing on another machine
 

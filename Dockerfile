@@ -1,30 +1,43 @@
 # syntax=docker/dockerfile:1
 
-# ---- Build stage ----
-FROM rust:1-bookworm AS builder
+# ---- Build stage (cross-compiles on the native build platform) ----
+# Pinned to $BUILDPLATFORM so the compiler runs natively (fast) and targets the
+# requested $TARGETARCH via a cross toolchain — avoids emulating the whole build.
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
+ARG TARGETARCH
 WORKDIR /app
 
-# Cache dependencies: build against stub sources first, then the real ones.
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir src \
-    && echo 'fn main() {}' > src/main.rs \
-    && : > src/lib.rs \
-    && cargo build --release --locked \
-    && rm -rf src
+# aarch64 (arm64) cross toolchain (incl. target libc headers) + Rust targets.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+
+# Cross-compilation env for aarch64 (used only when TARGETARCH=arm64).
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+    AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
 
 COPY . .
-# Bust the cached crate build so the real sources are compiled.
-RUN touch src/main.rs src/lib.rs \
-    && cargo build --release --locked --bin pulsemq
+RUN set -eux; \
+    case "$TARGETARCH" in \
+    amd64) target=x86_64-unknown-linux-gnu ;; \
+    arm64) target=aarch64-unknown-linux-gnu ;; \
+    *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    cargo build --release --locked --target "$target" --bin pulsemq; \
+    cp "target/$target/release/pulsemq" /pulsemq
 
-# ---- Runtime stage ----
+# ---- Runtime stage (target architecture) ----
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -u 10001 -M -s /usr/sbin/nologin mqtt
+    && useradd -u 10001 -M -s /usr/sbin/nologin pulsemq
 
-COPY --from=builder /app/target/release/pulsemq /usr/local/bin/pulsemq
+COPY --from=builder /pulsemq /usr/local/bin/pulsemq
 
 # Persistent state (SQLite DB) lives here.
 WORKDIR /data

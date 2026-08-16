@@ -12,6 +12,14 @@ per-connection (v5 is the primary/default protocol). It uses **Tokio** for
 asynchronous networking and **SQLite** (bundled, latest amalgamation, via
 `rusqlite`) for durable state.
 
+## Why I built this
+
+1. **To learn Claude** — by building a real, useful application (not a toy) that
+   I can run myself and that hopefully others find useful too.
+2. **To learn Rust.**
+3. **To have a small, lightweight MQTT broker** that's easy to deploy on small
+   systems like a Raspberry Pi, or as a Docker container.
+
 ## Features
 
 Implements the full MQTT v5.0 control-packet set and the core broker behaviour:
@@ -100,12 +108,15 @@ Or with Compose (see [`docker-compose.yml`](docker-compose.yml)):
 docker compose up -d
 ```
 
-The image runs as a non-root user, stores its SQLite state in the `/data`
-volume, exposes `1883` (MQTT), `8883` (TLS), `8080` (WebSockets) and `9001`
-(admin), and has a `HEALTHCHECK` against `/health`. Configure it with the same
-environment variables described below (mount certs / password / ACL / YAML
-files into the container, e.g. under `/config`). Build locally with
-`docker build -t pulsemq .`.
+The image is **multi-arch** (`linux/amd64` and `linux/arm64`), so the same tag
+runs on x86-64 servers and on arm64 boards like a Raspberry Pi (64-bit OS) —
+Docker pulls the right variant automatically. It runs as a non-root user, stores
+its SQLite state in the `/data` volume, exposes `1883` (MQTT), `8883` (TLS),
+`8080` (WebSockets) and `9001` (admin), and has a `HEALTHCHECK` against
+`/health`. Configure it with the same environment variables described below
+(mount certs / password / ACL / YAML files into the container, e.g. under
+`/config`). Build locally with `docker build -t pulsemq .`, or for another
+architecture with `docker buildx build --platform linux/arm64 -t pulsemq .`.
 
 ## Configuration
 
