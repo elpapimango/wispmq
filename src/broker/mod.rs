@@ -264,10 +264,13 @@ impl Broker {
             bytes_sent: Metrics::get(&m.bytes_sent),
             publish_received: Metrics::get(&m.publish_received),
             publish_delivered: Metrics::get(&m.publish_delivered),
+            bridge_forwarded_out: Metrics::get(&m.bridge_forwarded_out),
+            bridge_forwarded_in: Metrics::get(&m.bridge_forwarded_in),
             clients_connected,
             sessions_total: st.sessions.len() as u64,
             retained_messages: st.retained.len() as u64,
             subscriptions_total,
+            bridges_connected: Metrics::get(&m.bridges_connected),
         }
     }
 
@@ -310,6 +313,76 @@ impl Broker {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.inner.state.lock().expect("broker state poisoned")
+    }
+
+    // ---------------------------------------------------------------------
+    // Internal API for bridges (broker-to-broker forwarding)
+    //
+    // A bridge is a trusted in-process participant: it registers a clean local
+    // session bound to an outgoing channel, subscribes (at QoS 0) to the local
+    // topics it forwards outward, and injects messages it receives from the
+    // remote back into local routing. It bypasses auth/ACL.
+    // ---------------------------------------------------------------------
+
+    /// Register a clean, non-persistent bridge session bound to `out`. Returns
+    /// its epoch (used to detect takeover on deregistration).
+    pub fn register_bridge(&self, client_id: String, out: OutTx) -> u64 {
+        let mut st = self.lock();
+        let epoch = st.next_epoch;
+        st.next_epoch += 1;
+        let mut session = Session::new(client_id.clone(), 0);
+        session.epoch = epoch;
+        session.identity = Some("$bridge".to_string());
+        session.out = Some(out);
+        st.sessions.insert(client_id, session);
+        epoch
+    }
+
+    /// Add a local subscription for a bridge's outbound topics. The in-process
+    /// hop is QoS 0 (fire-and-forget; the configured QoS applies on the
+    /// bridge↔remote link), `no_local` prevents echoing injected messages back
+    /// out, and Retain As Published preserves the RETAIN flag so retained
+    /// state can be forwarded.
+    pub fn bridge_add_subscription(&self, client_id: &str, filter: &str, no_local: bool) {
+        let mut st = self.lock();
+        if let Some(s) = st.sessions.get_mut(client_id) {
+            s.subscriptions.push(Subscription {
+                filter: filter.to_string(),
+                share_name: None,
+                qos: QoS::AtMostOnce,
+                no_local,
+                retain_as_published: true,
+                retain_handling: RetainHandling::DoNotSend,
+                subscription_identifier: None,
+            });
+        }
+    }
+
+    /// Inject a message received from a remote into local routing, as if
+    /// published by `from` (so `no_local` on the bridge's own subscription
+    /// prevents a loop). Handles retained storage. Bypasses publish ACL.
+    pub fn inject_publish(&self, from: &str, message: Message) {
+        let mut st = self.lock();
+        if message.retain {
+            if message.payload.is_empty() {
+                st.retained.remove(&message.topic);
+                self.inner.storage.delete_retained(message.topic.clone());
+            } else {
+                st.retained.insert(message.topic.clone(), message.clone());
+                self.inner
+                    .storage
+                    .upsert_retained(message.topic.clone(), message.clone());
+            }
+        }
+        self.route(&mut st, Some(from), &message);
+    }
+
+    /// Remove a bridge session on shutdown, if the epoch still matches.
+    pub fn deregister_bridge(&self, client_id: &str, epoch: u64) {
+        let mut st = self.lock();
+        if st.sessions.get(client_id).map(|s| s.epoch) == Some(epoch) {
+            st.sessions.remove(client_id);
+        }
     }
 
     // ---------------------------------------------------------------------

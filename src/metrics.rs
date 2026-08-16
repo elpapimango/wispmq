@@ -21,6 +21,12 @@ pub struct Metrics {
     pub publish_received: AtomicU64,
     /// PUBLISH deliveries fanned out to subscribers.
     pub publish_delivered: AtomicU64,
+    /// Messages forwarded out to a bridged remote broker.
+    pub bridge_forwarded_out: AtomicU64,
+    /// Messages received from a bridged remote and injected locally.
+    pub bridge_forwarded_in: AtomicU64,
+    /// Currently-connected bridges (gauge: inc on connect, dec on disconnect).
+    pub bridges_connected: AtomicU64,
 }
 
 impl Metrics {
@@ -38,6 +44,11 @@ impl Metrics {
     pub fn get(counter: &AtomicU64) -> u64 {
         counter.load(Ordering::Relaxed)
     }
+
+    #[inline]
+    pub fn dec(counter: &AtomicU64) {
+        counter.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// A point-in-time view combining counters and computed gauges.
@@ -51,11 +62,14 @@ pub struct Snapshot {
     pub bytes_sent: u64,
     pub publish_received: u64,
     pub publish_delivered: u64,
+    pub bridge_forwarded_out: u64,
+    pub bridge_forwarded_in: u64,
     // Gauges.
     pub clients_connected: u64,
     pub sessions_total: u64,
     pub retained_messages: u64,
     pub subscriptions_total: u64,
+    pub bridges_connected: u64,
 }
 
 impl Snapshot {
@@ -102,6 +116,16 @@ impl Snapshot {
             "Total PUBLISH deliveries to subscribers.",
             self.publish_delivered,
         );
+        counter(
+            "mqtt_bridge_forwarded_out_total",
+            "Total messages forwarded out to bridged remote brokers.",
+            self.bridge_forwarded_out,
+        );
+        counter(
+            "mqtt_bridge_forwarded_in_total",
+            "Total messages received from bridged remotes and injected locally.",
+            self.bridge_forwarded_in,
+        );
 
         let mut gauge = |name: &str, help: &str, val: u64| {
             o.push_str(&format!(
@@ -127,6 +151,11 @@ impl Snapshot {
             "mqtt_subscriptions_total",
             "Active subscriptions across all sessions.",
             self.subscriptions_total,
+        );
+        gauge(
+            "mqtt_bridges_connected",
+            "Currently-connected broker-to-broker bridges.",
+            self.bridges_connected,
         );
         o
     }

@@ -56,8 +56,8 @@ No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
 WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
 SSE is not implemented (`GET /mcp` → 405).
 
-**Planned work is in [`TODO.md`](TODO.md)** — pick the top item. Currently:
-(1) message forwarding / broker-to-broker bridge, (2) more metrics.
+**Planned work is in [`TODO.md`](TODO.md)** — pick the top item. Forwarding
+(broker-to-broker bridge, `bridge.rs`) is now done; next is (2) more metrics.
 
 ## Commands
 
@@ -94,6 +94,8 @@ before changing it.
 - `tls` — rustls `TlsAcceptor` from PEM cert/key; client-cert CN extraction
 - `auth` — username/password credentials (PBKDF2-HMAC-SHA256 via `ring`)
 - `acl` — per-identity publish/subscribe authorization (JSON policy)
+- `bridge` — broker-to-broker forwarding: outbound MQTT client per remote,
+  reconnect+backoff, QoS 0/1/2 both ways, loop prevention via `no_local`
 - `metrics` — atomic counters + Prometheus/JSON snapshot
 - `admin` — HTTP server: `/health`, Prometheus `/metrics`, MCP `/mcp`
 - `config` — layered configuration (see below)

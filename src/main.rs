@@ -116,6 +116,17 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Broker-to-broker forwarding bridges, if any are configured.
+    for bridge_cfg in broker.config().bridges.clone() {
+        tracing::info!(
+            "starting bridge {:?} -> {}",
+            bridge_cfg.name,
+            bridge_cfg.address
+        );
+        let bridge_broker = broker.clone();
+        tokio::spawn(pulsemq::bridge::run(bridge_broker, bridge_cfg));
+    }
+
     // Reload the ACL policy on SIGHUP (Unix). The rest of the broker keeps
     // running; a bad policy file is reported and the previous one is kept.
     #[cfg(unix)]

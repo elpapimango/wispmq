@@ -10,7 +10,14 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 
 ---
 
-## 1. Message forwarding (broker-to-broker bridge)
+## 1. Message forwarding (broker-to-broker bridge) — ✅ DONE
+
+Implemented in `src/bridge.rs` (+ `broker` internal API, `tls::client_config`,
+`ws::client`, config `bridges:` list, `tests/bridge.rs`, README/example). All
+acceptance criteria below are met: bidirectional forwarding over tcp/tls/ws/wss,
+reconnect+backoff, loop prevention via `no_local`, QoS 0/1/2, bridge metrics.
+Verified with two in-process brokers (integration test) and two live PulseMQ
+instances via mosquitto. The original design notes are kept below for reference.
 
 Let PulseMQ **forward** messages to/from one or more remote MQTT brokers, the
 way a mosquitto "bridge" does — so PulseMQ can aggregate edge brokers up to a

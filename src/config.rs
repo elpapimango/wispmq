@@ -34,6 +34,7 @@ const KNOWN_YAML_KEYS: &[&str] = &[
     "retain_available",
     "topic_alias_maximum",
     "server_keep_alive",
+    "bridges",
 ];
 
 /// Default config-file names looked for in the working directory.
@@ -103,6 +104,8 @@ pub struct Config {
     pub server_keep_alive: Option<u16>,
     /// Maximum Session Expiry Interval the server will retain state for.
     pub max_session_expiry: u32,
+    /// Broker-to-broker forwarding bridges (config-file only). See `bridge`.
+    pub bridges: Vec<crate::bridge::BridgeConfig>,
     /// Path of the YAML config file that was loaded, if any (informational).
     pub config_file: Option<String>,
 }
@@ -134,6 +137,7 @@ impl Default for Config {
             topic_alias_maximum: 16,
             server_keep_alive: None,
             max_session_expiry: 3600,
+            bridges: Vec::new(),
             config_file: None,
         }
     }
@@ -409,6 +413,13 @@ impl Config {
         }
         if let Some(b) = y_bool(doc, "retain_available", source)? {
             self.retain_available = b;
+        }
+
+        // Bridges are a structured list; parsed by the bridge module. A config
+        // file that omits `bridges` leaves any already-set value untouched.
+        let bridges = crate::bridge::parse_bridges(doc, source)?;
+        if !bridges.is_empty() {
+            self.bridges = bridges;
         }
 
         Ok(())

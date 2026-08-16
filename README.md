@@ -71,6 +71,7 @@ The code is layered so each concern maps to the spec section it implements:
 | `tls` | rustls `TlsAcceptor` from PEM cert/key + client-cert CN | — |
 | `ws` | WebSocket transport: `mqtt`-subprotocol handshake + byte-stream adapter | §6 |
 | `acl` | Per-identity publish/subscribe authorization | — |
+| `bridge` | Broker-to-broker forwarding (outbound MQTT client) | — |
 
 **Concurrency.** All shared state lives behind a single `std::sync::Mutex`.
 Handlers never `await` while holding it — outbound delivery is a non-blocking
@@ -255,9 +256,11 @@ Point a scraper at `http://127.0.0.1:9001/metrics`. Exposed series:
 - Counters: `mqtt_connections_total`, `mqtt_packets_received_total`,
   `mqtt_packets_sent_total`, `mqtt_bytes_received_total`,
   `mqtt_bytes_sent_total`, `mqtt_publish_received_total`,
-  `mqtt_publish_delivered_total`.
+  `mqtt_publish_delivered_total`, `mqtt_bridge_forwarded_out_total`,
+  `mqtt_bridge_forwarded_in_total`.
 - Gauges: `mqtt_clients_connected`, `mqtt_sessions_total`,
-  `mqtt_retained_messages`, `mqtt_subscriptions_total`.
+  `mqtt_retained_messages`, `mqtt_subscriptions_total`,
+  `mqtt_bridges_connected`.
 
 ```yaml
 # prometheus.yml
@@ -510,6 +513,41 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t 'sensors/#' -q 1 -v
 # terminal 2 — publish
 mosquitto_pub -h 127.0.0.1 -p 1883 -V 5 -t 'sensors/temp' -q 1 -m '21.5C'
 ```
+
+## Forwarding (broker-to-broker bridge)
+
+PulseMQ can **forward** messages to and from remote MQTT brokers (like a
+mosquitto bridge) — e.g. to aggregate edge brokers up to a central one, or fan a
+central broker's topics down to the edge. Each bridge is an outbound MQTT client
+in its own task with **automatic reconnect + backoff**, over any transport
+(`tcp`/`tls`/`ws`/`wss`). Bridges are configured as a list in the YAML config
+file (config-file only):
+
+```yaml
+bridges:
+  - name: central
+    address: "tls://central.example:8883"   # tcp|tls|ws|wss (mqtt/mqtts alias tcp/tls)
+    client_id: "pulsemq-edge-1"             # optional (default pulsemq-bridge-<name>)
+    username: "edge"                         # optional
+    password: "secret"                       # optional
+    keepalive: 30                            # seconds (default 60)
+    protocol_version: 5                      # 3 | 4 | 5 (default 5)
+    tls_ca: "certs/ca.pem"                   # required for tls/wss (unless tls_insecure)
+    tls_cert: "certs/edge.pem"               # optional (mutual TLS)
+    tls_key: "certs/edge.key"
+    # tls_insecure: false                    # skip server cert verification (danger; testing)
+    topics:
+      - { pattern: "sensors/#", direction: out, qos: 1 }  # local -> remote
+      - { pattern: "cmd/#",     direction: in,  qos: 1 }  # remote -> local
+      - { pattern: "state/#",   direction: both, qos: 0 } # both ways
+```
+
+Notes: the local broker→bridge hop is QoS 0 (in-process) and the mapping's QoS
+applies on the bridge↔remote link. Loop prevention uses `no_local`, so a message
+never flows straight back out the bridge it arrived on (two mutually-bridged
+brokers won't echo forever). Bridge activity is exposed via the
+`mqtt_bridge_forwarded_{out,in}_total` counters and the `mqtt_bridges_connected`
+gauge.
 
 ## Tests
 

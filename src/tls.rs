@@ -9,13 +9,119 @@ use std::sync::Arc;
 
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
-use tokio_rustls::rustls::{RootCertStore, ServerConfig};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 
 use crate::error::{MqttError, Result};
 
 fn cfg_err(msg: impl Into<String>) -> MqttError {
     MqttError::Config(msg.into())
+}
+
+/// Build a rustls `ClientConfig` for connecting *out* to a TLS server (used by
+/// the bridge). Server certificates are verified against `ca_path` (a PEM CA
+/// bundle). When `client_cert`/`client_key` are given, they are presented for
+/// mutual TLS. `insecure` disables server-certificate verification (danger —
+/// for testing only).
+pub fn client_config(
+    ca_path: Option<&str>,
+    client_cert: Option<&str>,
+    client_key: Option<&str>,
+    insecure: bool,
+) -> Result<Arc<ClientConfig>> {
+    let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
+    let builder = ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| cfg_err(format!("tls provider: {e}")))?;
+
+    // Server trust: a CA bundle, or (danger) accept anything.
+    let builder = if insecure {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(danger::NoVerify(provider)))
+    } else {
+        let ca =
+            ca_path.ok_or_else(|| cfg_err("a TLS bridge requires tls_ca (or tls_insecure)"))?;
+        let mut roots = RootCertStore::empty();
+        for cert in load_certs(ca)? {
+            roots
+                .add(cert)
+                .map_err(|e| cfg_err(format!("bridge CA {ca}: {e}")))?;
+        }
+        builder.with_root_certificates(roots)
+    };
+
+    let config = match (client_cert, client_key) {
+        (Some(c), Some(k)) => builder
+            .with_client_auth_cert(load_certs(c)?, load_key(k)?)
+            .map_err(|e| cfg_err(format!("bridge client cert/key: {e}")))?,
+        (None, None) => builder.with_no_client_auth(),
+        _ => return Err(cfg_err("bridge tls_cert and tls_key must be set together")),
+    };
+    Ok(Arc::new(config))
+}
+
+mod danger {
+    use std::sync::Arc;
+
+    use tokio_rustls::rustls::client::danger::{
+        HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+    };
+    use tokio_rustls::rustls::crypto::{
+        verify_tls12_signature, verify_tls13_signature, CryptoProvider,
+    };
+    use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use tokio_rustls::rustls::{DigitallySignedStruct, Error, SignatureScheme};
+
+    /// A `ServerCertVerifier` that accepts any certificate. Insecure — testing
+    /// only. Signature verification still uses the crypto provider.
+    #[derive(Debug)]
+    pub struct NoVerify(pub Arc<CryptoProvider>);
+
+    impl ServerCertVerifier for NoVerify {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp: &[u8],
+            _now: UnixTime,
+        ) -> Result<ServerCertVerified, Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
+            verify_tls12_signature(
+                message,
+                cert,
+                dss,
+                &self.0.signature_verification_algorithms,
+            )
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
+            verify_tls13_signature(
+                message,
+                cert,
+                dss,
+                &self.0.signature_verification_algorithms,
+            )
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.0.signature_verification_algorithms.supported_schemes()
+        }
+    }
 }
 
 /// Build a `TlsAcceptor` for the given PEM certificate chain and private key.

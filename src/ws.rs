@@ -38,6 +38,26 @@ where
     Ok(WsStream::new(ws))
 }
 
+/// Perform the *client*-side WebSocket handshake to `url` (offering the `mqtt`
+/// subprotocol) over an already-connected (optionally TLS) stream, and return a
+/// byte-stream adapter. Used by the bridge to reach a `ws://`/`wss://` remote.
+pub async fn client<S>(stream: S, url: &str) -> io::Result<WsStream<S>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mqtt"));
+    let (ws, _resp) = tokio_tungstenite::client_async(request, stream)
+        .await
+        .map_err(ws_to_io)?;
+    Ok(WsStream::new(ws))
+}
+
 /// Handshake callback that echoes the `mqtt` subprotocol when the client offers
 /// it, as required by [MQTT-6.0.0-4].
 struct SelectMqttSubprotocol;

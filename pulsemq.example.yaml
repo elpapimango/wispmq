@@ -43,3 +43,20 @@ maximum_qos: 2                       # 0, 1, or 2
 retain_available: true
 topic_alias_maximum: 16
 # server_keep_alive: 60              # override the client's Keep Alive (seconds)
+
+# --- Forwarding / bridges to remote brokers (config-file only) ---
+# bridges:
+#   - name: central
+#     address: "tls://central.example:8883"  # tcp|tls|ws|wss (mqtt/mqtts alias tcp/tls)
+#     client_id: "pulsemq-edge-1"            # optional
+#     username: "edge"                        # optional
+#     password: "secret"
+#     keepalive: 30                           # seconds
+#     protocol_version: 5                     # 3 | 4 | 5
+#     tls_ca: "certs/ca.pem"                  # required for tls/wss
+#     # tls_cert / tls_key                    # optional (mutual TLS)
+#     # tls_insecure: false                   # skip server verification (danger)
+#     topics:
+#       - { pattern: "sensors/#", direction: out,  qos: 1 }  # local -> remote
+#       - { pattern: "cmd/#",     direction: in,   qos: 1 }  # remote -> local
+#       - { pattern: "state/#",   direction: both, qos: 0 }

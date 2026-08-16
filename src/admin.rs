@@ -393,10 +393,13 @@ fn call_tool(broker: &Broker, params: Option<&Value>) -> std::result::Result<Val
                 "bytes_sent": s.bytes_sent,
                 "publish_received": s.publish_received,
                 "publish_delivered": s.publish_delivered,
+                "bridge_forwarded_out": s.bridge_forwarded_out,
+                "bridge_forwarded_in": s.bridge_forwarded_in,
                 "clients_connected": s.clients_connected,
                 "sessions_total": s.sessions_total,
                 "retained_messages": s.retained_messages,
                 "subscriptions_total": s.subscriptions_total,
+                "bridges_connected": s.bridges_connected,
             })
         }
         "list_clients" => {
