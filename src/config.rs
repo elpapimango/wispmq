@@ -3,8 +3,35 @@
 
 use std::net::SocketAddr;
 
+use yaml_rust2::{Yaml, YamlLoader};
+
 use crate::error::{MqttError, Result};
 use crate::types::QoS;
+
+/// Config-file keys recognised in YAML (mirrors the env/CLI options).
+const KNOWN_YAML_KEYS: &[&str] = &[
+    "listen_addr",
+    "admin_addr",
+    "admin_token",
+    "tls_cert",
+    "tls_key",
+    "tls_client_ca",
+    "ws_listen_addr",
+    "ws_tls_cert",
+    "ws_tls_key",
+    "ws_tls_client_ca",
+    "admin_tls_cert",
+    "admin_tls_key",
+    "admin_tls_client_ca",
+    "acl_path",
+    "db_path",
+    "max_packet_size",
+    "receive_maximum",
+    "max_session_expiry",
+];
+
+/// Default config-file names looked for in the working directory.
+const DEFAULT_CONFIG_FILES: &[&str] = &["mqtt_server.yaml", "mqtt_server.yml"];
 
 /// Crate version, surfaced by `--version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -63,6 +90,8 @@ pub struct Config {
     pub server_keep_alive: Option<u16>,
     /// Maximum Session Expiry Interval the server will retain state for.
     pub max_session_expiry: u32,
+    /// Path of the YAML config file that was loaded, if any (informational).
+    pub config_file: Option<String>,
 }
 
 impl Default for Config {
@@ -90,64 +119,286 @@ impl Default for Config {
             topic_alias_maximum: 16,
             server_keep_alive: None,
             max_session_expiry: 3600,
+            config_file: None,
         }
     }
 }
 
 impl Config {
-    /// Load configuration from environment variables, falling back to defaults.
+    /// Build a config from defaults and environment variables.
     pub fn from_env() -> Self {
         let mut cfg = Config::default();
-        if let Ok(v) = std::env::var("MQTT_LISTEN_ADDR") {
+        cfg.apply_env();
+        cfg
+    }
+
+    /// Overlay environment variables onto this config (env wins over whatever
+    /// is already set, e.g. defaults or a config file).
+    pub fn apply_env(&mut self) {
+        if let Some(v) = non_empty_env("MQTT_LISTEN_ADDR") {
             if let Ok(addr) = v.parse() {
-                cfg.listen_addr = addr;
+                self.listen_addr = addr;
             }
         }
-        if let Ok(v) = std::env::var("MQTT_ADMIN_ADDR") {
+        if let Some(v) = non_empty_env("MQTT_ADMIN_ADDR") {
             if let Ok(addr) = v.parse() {
-                cfg.admin_addr = addr;
+                self.admin_addr = addr;
             }
         }
-        if let Ok(v) = std::env::var("MQTT_ADMIN_TOKEN") {
-            let v = v.trim().to_string();
-            if !v.is_empty() {
-                cfg.admin_token = Some(v);
-            }
+        if let Some(v) = non_empty_env("MQTT_ADMIN_TOKEN") {
+            self.admin_token = Some(v);
         }
-        cfg.tls_cert = non_empty_env("MQTT_TLS_CERT");
-        cfg.tls_key = non_empty_env("MQTT_TLS_KEY");
-        cfg.tls_client_ca = non_empty_env("MQTT_TLS_CLIENT_CA");
+        overlay_opt(&mut self.tls_cert, non_empty_env("MQTT_TLS_CERT"));
+        overlay_opt(&mut self.tls_key, non_empty_env("MQTT_TLS_KEY"));
+        overlay_opt(&mut self.tls_client_ca, non_empty_env("MQTT_TLS_CLIENT_CA"));
         if let Some(v) = non_empty_env("MQTT_WS_LISTEN_ADDR") {
             if let Ok(addr) = v.parse() {
-                cfg.ws_listen_addr = Some(addr);
+                self.ws_listen_addr = Some(addr);
             }
         }
-        cfg.ws_tls_cert = non_empty_env("MQTT_WS_TLS_CERT");
-        cfg.ws_tls_key = non_empty_env("MQTT_WS_TLS_KEY");
-        cfg.ws_tls_client_ca = non_empty_env("MQTT_WS_TLS_CLIENT_CA");
-        cfg.admin_tls_cert = non_empty_env("MQTT_ADMIN_TLS_CERT");
-        cfg.admin_tls_key = non_empty_env("MQTT_ADMIN_TLS_KEY");
-        cfg.admin_tls_client_ca = non_empty_env("MQTT_ADMIN_TLS_CLIENT_CA");
-        cfg.acl_path = non_empty_env("MQTT_ACL_FILE");
-        if let Ok(v) = std::env::var("MQTT_DB_PATH") {
-            cfg.db_path = v;
+        overlay_opt(&mut self.ws_tls_cert, non_empty_env("MQTT_WS_TLS_CERT"));
+        overlay_opt(&mut self.ws_tls_key, non_empty_env("MQTT_WS_TLS_KEY"));
+        overlay_opt(
+            &mut self.ws_tls_client_ca,
+            non_empty_env("MQTT_WS_TLS_CLIENT_CA"),
+        );
+        overlay_opt(
+            &mut self.admin_tls_cert,
+            non_empty_env("MQTT_ADMIN_TLS_CERT"),
+        );
+        overlay_opt(&mut self.admin_tls_key, non_empty_env("MQTT_ADMIN_TLS_KEY"));
+        overlay_opt(
+            &mut self.admin_tls_client_ca,
+            non_empty_env("MQTT_ADMIN_TLS_CLIENT_CA"),
+        );
+        overlay_opt(&mut self.acl_path, non_empty_env("MQTT_ACL_FILE"));
+        if let Some(v) = non_empty_env("MQTT_DB_PATH") {
+            self.db_path = v;
         }
-        if let Ok(v) = std::env::var("MQTT_MAX_PACKET_SIZE") {
+        if let Some(v) = non_empty_env("MQTT_MAX_PACKET_SIZE") {
             if let Ok(n) = v.parse() {
-                cfg.max_packet_size = n;
+                self.max_packet_size = n;
             }
         }
-        if let Ok(v) = std::env::var("MQTT_RECEIVE_MAXIMUM") {
+        if let Some(v) = non_empty_env("MQTT_RECEIVE_MAXIMUM") {
             if let Ok(n) = v.parse() {
-                cfg.receive_maximum = n;
+                self.receive_maximum = n;
             }
         }
-        if let Ok(v) = std::env::var("MQTT_MAX_SESSION_EXPIRY") {
+        if let Some(v) = non_empty_env("MQTT_MAX_SESSION_EXPIRY") {
             if let Ok(n) = v.parse() {
-                cfg.max_session_expiry = n;
+                self.max_session_expiry = n;
             }
         }
-        cfg
+    }
+}
+
+/// Overwrite `slot` with `value` when `value` is `Some`; leave it otherwise.
+fn overlay_opt(slot: &mut Option<String>, value: Option<String>) {
+    if value.is_some() {
+        *slot = value;
+    }
+}
+
+impl Config {
+    /// Full configuration pipeline: defaults, then a YAML config file (if any),
+    /// then environment variables, then command-line flags — each layer
+    /// overriding the previous. Returns `Startup::Exit` for `--help`/`--version`.
+    pub fn load() -> Result<Startup> {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+
+        // Handle --help/--version up front so they work even if a config file
+        // is missing or malformed.
+        for a in &args {
+            match a.as_str() {
+                "-h" | "--help" => {
+                    print!("{HELP}");
+                    return Ok(Startup::Exit);
+                }
+                "-V" | "--version" => {
+                    println!("mqtt_server {VERSION}");
+                    return Ok(Startup::Exit);
+                }
+                _ => {}
+            }
+        }
+
+        let mut cfg = Config::default();
+
+        // Config file: an explicit --config / MQTT_CONFIG_FILE path must exist;
+        // otherwise fall back to a default file in the working directory.
+        let explicit = cli_config_path(&args).or_else(|| non_empty_env("MQTT_CONFIG_FILE"));
+        match explicit {
+            Some(path) => cfg.apply_yaml_file(&path)?,
+            None => {
+                if let Some(path) = default_config_file() {
+                    cfg.apply_yaml_file(&path)?;
+                }
+            }
+        }
+
+        cfg.apply_env();
+        cfg.apply_args(&args)
+    }
+
+    /// Read and apply a YAML config file, recording its path.
+    pub fn apply_yaml_file(&mut self, path: &str) -> Result<()> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| MqttError::Config(format!("read config file {path}: {e}")))?;
+        self.apply_yaml_str(&text, path)?;
+        self.config_file = Some(path.to_string());
+        Ok(())
+    }
+
+    /// Overlay YAML config text onto this config. `source` names the file for
+    /// error messages. Unknown keys and wrong value types are rejected.
+    pub fn apply_yaml_str(&mut self, text: &str, source: &str) -> Result<()> {
+        let docs = YamlLoader::load_from_str(text)
+            .map_err(|e| MqttError::Config(format!("{source}: invalid YAML: {e}")))?;
+        let Some(doc) = docs.first() else {
+            return Ok(()); // empty file
+        };
+        if doc.is_null() {
+            return Ok(());
+        }
+        let Yaml::Hash(map) = doc else {
+            return Err(MqttError::Config(format!(
+                "{source}: top level must be a mapping of option: value"
+            )));
+        };
+        for k in map.keys() {
+            if let Some(key) = k.as_str() {
+                if !KNOWN_YAML_KEYS.contains(&key) {
+                    return Err(MqttError::Config(format!("{source}: unknown key '{key}'")));
+                }
+            }
+        }
+
+        // Socket addresses.
+        if let Some(v) = y_str(doc, "listen_addr", source)? {
+            self.listen_addr = parse_addr(&v, "listen_addr")?;
+        }
+        if let Some(v) = y_str(doc, "admin_addr", source)? {
+            self.admin_addr = parse_addr(&v, "admin_addr")?;
+        }
+        if let Some(v) = y_str(doc, "ws_listen_addr", source)? {
+            self.ws_listen_addr = Some(parse_addr(&v, "ws_listen_addr")?);
+        }
+
+        // String / path options.
+        if let Some(v) = y_str(doc, "admin_token", source)? {
+            self.admin_token = Some(v);
+        }
+        if let Some(v) = y_str(doc, "tls_cert", source)? {
+            self.tls_cert = Some(v);
+        }
+        if let Some(v) = y_str(doc, "tls_key", source)? {
+            self.tls_key = Some(v);
+        }
+        if let Some(v) = y_str(doc, "tls_client_ca", source)? {
+            self.tls_client_ca = Some(v);
+        }
+        if let Some(v) = y_str(doc, "ws_tls_cert", source)? {
+            self.ws_tls_cert = Some(v);
+        }
+        if let Some(v) = y_str(doc, "ws_tls_key", source)? {
+            self.ws_tls_key = Some(v);
+        }
+        if let Some(v) = y_str(doc, "ws_tls_client_ca", source)? {
+            self.ws_tls_client_ca = Some(v);
+        }
+        if let Some(v) = y_str(doc, "admin_tls_cert", source)? {
+            self.admin_tls_cert = Some(v);
+        }
+        if let Some(v) = y_str(doc, "admin_tls_key", source)? {
+            self.admin_tls_key = Some(v);
+        }
+        if let Some(v) = y_str(doc, "admin_tls_client_ca", source)? {
+            self.admin_tls_client_ca = Some(v);
+        }
+        if let Some(v) = y_str(doc, "acl_path", source)? {
+            self.acl_path = Some(v);
+        }
+        if let Some(v) = y_str(doc, "db_path", source)? {
+            self.db_path = v;
+        }
+
+        // Integers.
+        if let Some(n) = y_u32(doc, "max_packet_size", source)? {
+            self.max_packet_size = n;
+        }
+        if let Some(n) = y_u32(doc, "max_session_expiry", source)? {
+            self.max_session_expiry = n;
+        }
+        if let Some(n) = y_i64(doc, "receive_maximum", source)? {
+            self.receive_maximum = u16::try_from(n).map_err(|_| {
+                MqttError::Config(format!("{source}: receive_maximum out of range (0-65535)"))
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+/// The first `--config`/`--config=PATH` value found in the arguments.
+fn cli_config_path(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(v) = args[i].strip_prefix("--config=") {
+            return Some(v.to_string());
+        }
+        if args[i] == "--config" {
+            return args.get(i + 1).cloned();
+        }
+        i += 1;
+    }
+    None
+}
+
+/// A default config file present in the working directory, if any.
+fn default_config_file() -> Option<String> {
+    DEFAULT_CONFIG_FILES
+        .iter()
+        .find(|name| std::path::Path::new(name).is_file())
+        .map(|name| name.to_string())
+}
+
+/// Read a string value from a YAML mapping, erroring on a wrong type.
+fn y_str(doc: &Yaml, key: &str, source: &str) -> Result<Option<String>> {
+    let v = &doc[key];
+    if v.is_badvalue() || v.is_null() {
+        return Ok(None);
+    }
+    match v.as_str() {
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => Ok(Some(s.trim().to_string())),
+        None => Err(MqttError::Config(format!(
+            "{source}: key '{key}' must be a string"
+        ))),
+    }
+}
+
+/// Read an integer value from a YAML mapping, erroring on a wrong type.
+fn y_i64(doc: &Yaml, key: &str, source: &str) -> Result<Option<i64>> {
+    let v = &doc[key];
+    if v.is_badvalue() || v.is_null() {
+        return Ok(None);
+    }
+    match v.as_i64() {
+        Some(n) => Ok(Some(n)),
+        None => Err(MqttError::Config(format!(
+            "{source}: key '{key}' must be an integer"
+        ))),
+    }
+}
+
+/// Read a `u32` value from a YAML mapping.
+fn y_u32(doc: &Yaml, key: &str, source: &str) -> Result<Option<u32>> {
+    match y_i64(doc, key, source)? {
+        Some(n) => Ok(Some(u32::try_from(n).map_err(|_| {
+            MqttError::Config(format!("{source}: key '{key}' out of range (0-4294967295)"))
+        })?)),
+        None => Ok(None),
     }
 }
 
@@ -174,8 +425,14 @@ mqtt_server — an MQTT v5.0 broker (Tokio + SQLite)
 USAGE:
     mqtt_server [OPTIONS]
 
-Every option can also be set via the environment variable shown in brackets.
-Command-line flags take precedence over environment variables.
+Every option can also be set via the environment variable shown in brackets, or
+in a YAML config file (key = the option name with underscores, e.g. listen_addr).
+Precedence, lowest to highest: config file < environment < command-line flags.
+
+CONFIG FILE:
+    --config <FILE>               Load this YAML config file [MQTT_CONFIG_FILE].
+                                  If omitted, mqtt_server.yaml (or .yml) in the
+                                  working directory is used when present.
 
 NETWORK:
     --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
@@ -230,14 +487,6 @@ Logging verbosity is controlled by RUST_LOG (default: info).
 ";
 
 impl Config {
-    /// Build the configuration from environment variables, then apply any
-    /// command-line overrides (flags win over the environment). Returns
-    /// `Startup::Exit` when `--help`/`--version` was requested.
-    pub fn from_env_and_args() -> Result<Startup> {
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        Config::from_env().apply_args(&args)
-    }
-
     /// Apply CLI overrides onto an existing config. Split out for testing.
     pub fn apply_args(mut self, args: &[String]) -> Result<Startup> {
         let mut i = 0;
@@ -267,6 +516,10 @@ impl Config {
                 "-V" | "--version" => {
                     println!("mqtt_server {VERSION}");
                     return Ok(Startup::Exit);
+                }
+                // Already resolved before env/args were applied; consume value.
+                "--config" => {
+                    let _ = value(&mut i)?;
                 }
                 "--listen-addr" => self.listen_addr = parse_addr(&value(&mut i)?, "--listen-addr")?,
                 "--admin-addr" => self.admin_addr = parse_addr(&value(&mut i)?, "--admin-addr")?,
@@ -352,5 +605,72 @@ mod tests {
         assert!(matches!(ok, Ok(Startup::Run(_))));
         let bad = Config::default().apply_args(&["--nope".to_string()]);
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn yaml_config_applies_all_field_kinds() {
+        let yaml = r#"
+listen_addr: "127.0.0.1:1884"
+ws_listen_addr: "0.0.0.0:8080"
+tls_cert: "server.pem"
+admin_token: "sekret"
+acl_path: "acl.json"
+db_path: "/data/broker.db"
+max_packet_size: 2097152
+receive_maximum: 100
+max_session_expiry: 600
+"#;
+        let mut cfg = Config::default();
+        cfg.apply_yaml_str(yaml, "test.yaml").unwrap();
+        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
+        assert_eq!(
+            cfg.ws_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("0.0.0.0:8080")
+        );
+        assert_eq!(cfg.tls_cert.as_deref(), Some("server.pem"));
+        assert_eq!(cfg.admin_token.as_deref(), Some("sekret"));
+        assert_eq!(cfg.db_path, "/data/broker.db");
+        assert_eq!(cfg.max_packet_size, 2_097_152);
+        assert_eq!(cfg.receive_maximum, 100);
+        assert_eq!(cfg.max_session_expiry, 600);
+    }
+
+    #[test]
+    fn cli_flags_override_yaml() {
+        let mut cfg = Config::default();
+        cfg.apply_yaml_str(
+            "listen_addr: \"127.0.0.1:1\"\nreceive_maximum: 5\n",
+            "t.yaml",
+        )
+        .unwrap();
+        // CLI applied on top of the file wins.
+        let cfg = match cfg
+            .apply_args(&["--receive-maximum".into(), "42".into()])
+            .unwrap()
+        {
+            Startup::Run(c) => *c,
+            Startup::Exit => panic!("unexpected exit"),
+        };
+        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1"); // from file
+        assert_eq!(cfg.receive_maximum, 42); // CLI override
+    }
+
+    #[test]
+    fn yaml_rejects_unknown_key_and_bad_type() {
+        let mut cfg = Config::default();
+        assert!(cfg.apply_yaml_str("listen_port: 1883\n", "t.yaml").is_err());
+        let mut cfg = Config::default();
+        assert!(cfg
+            .apply_yaml_str("receive_maximum: \"lots\"\n", "t.yaml")
+            .is_err());
+        let mut cfg = Config::default();
+        assert!(cfg.apply_yaml_str("- a\n- b\n", "t.yaml").is_err());
+    }
+
+    #[test]
+    fn empty_yaml_is_ok() {
+        let mut cfg = Config::default();
+        assert!(cfg.apply_yaml_str("", "t.yaml").is_ok());
+        assert!(cfg.apply_yaml_str("# just a comment\n", "t.yaml").is_ok());
     }
 }

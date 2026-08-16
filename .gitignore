@@ -8,3 +8,7 @@
 
 # Windows "mark of the web" alternate-data-stream artifacts
 *:Zone.Identifier
+
+# Local config (may hold secrets); the tracked template is *.example.yaml
+mqtt_server.yaml
+mqtt_server.yml

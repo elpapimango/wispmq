@@ -1,0 +1,34 @@
+# Example mqtt_server configuration.
+#
+# Copy to `mqtt_server.yaml` (auto-loaded from the working directory) or point
+# at it with `--config <FILE>` / MQTT_CONFIG_FILE. Every key is optional and
+# corresponds to a CLI flag / environment variable. Precedence, lowest to
+# highest: this file < environment variables < command-line flags.
+
+# --- MQTT listener (raw TCP) ---
+listen_addr: "0.0.0.0:1883"
+# tls_cert: "certs/server.pem"       # both cert+key set => MQTT over TLS (8883)
+# tls_key: "certs/server.key"
+# tls_client_ca: "certs/ca.pem"      # also set => require & verify client certs (mTLS)
+
+# --- MQTT over WebSockets (optional; omit to disable) ---
+# ws_listen_addr: "0.0.0.0:8080"
+# ws_tls_cert: "certs/server.pem"    # both set => wss://
+# ws_tls_key: "certs/server.key"
+# ws_tls_client_ca: "certs/ca.pem"   # also set => mutual TLS on the WS port
+
+# --- Admin / metrics / MCP HTTP server ---
+admin_addr: "127.0.0.1:9001"
+# admin_token: "change-me"           # bearer token required for /metrics and /mcp
+# admin_tls_cert: "certs/server.pem" # both set => HTTPS
+# admin_tls_key: "certs/server.key"
+# admin_tls_client_ca: "certs/ca.pem"
+
+# --- Authorization ---
+# acl_path: "acl.json"               # per-identity publish/subscribe ACL (SIGHUP reloads)
+
+# --- Storage & limits ---
+db_path: "mqtt_broker.db"
+max_packet_size: 1048576             # bytes
+receive_maximum: 64                  # concurrent unacked QoS>0 publications
+max_session_expiry: 3600             # seconds

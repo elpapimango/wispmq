@@ -72,17 +72,56 @@ The broker listens for MQTT on `0.0.0.0:1883` by default, serves the admin
 HTTP endpoints on `127.0.0.1:9001`, and writes state to `mqtt_broker.db` in the
 working directory.
 
+## Configuration
+
+Every setting can be provided three ways — a **YAML config file**, an
+**environment variable**, or a **command-line flag** — layered in this order of
+increasing precedence:
+
+```
+defaults  <  config file  <  environment variables  <  command-line flags
+```
+
+The config file is discovered automatically: if `mqtt_server.yaml` (or
+`mqtt_server.yml`) exists in the working directory it is loaded. A different
+path can be given with `--config <FILE>` or `MQTT_CONFIG_FILE`; an explicitly
+named file that is missing or invalid is a startup error. Unknown keys and
+wrong value types are rejected.
+
+YAML keys are the option names with underscores (e.g. `listen_addr`). Example
+[`mqtt_server.example.yaml`](mqtt_server.example.yaml):
+
+```yaml
+listen_addr: "0.0.0.0:1883"
+tls_cert: "certs/server.pem"
+tls_key: "certs/server.key"
+tls_client_ca: "certs/ca.pem"        # enables mutual TLS
+
+ws_listen_addr: "0.0.0.0:8080"       # MQTT over WebSockets
+# ws_tls_cert / ws_tls_key           # ... over TLS (wss)
+
+admin_addr: "127.0.0.1:9001"
+admin_token: "change-me"             # bearer token for /metrics and /mcp
+acl_path: "acl.json"
+
+db_path: "mqtt_broker.db"
+max_packet_size: 1048576
+receive_maximum: 64
+max_session_expiry: 3600
+```
+
 ## Command-line options
 
-Every setting is available as both a command-line flag and an environment
-variable; **flags take precedence over the environment**. Run `--help` for the
-full list:
+Every setting is also available as a command-line flag and an environment
+variable. Run `--help` for the full list:
 
 ```bash
 ./target/release/mqtt_server --help
 ```
 
 ```
+CONFIG FILE:
+    --config <FILE>               Load a YAML config file [MQTT_CONFIG_FILE]
 NETWORK:
     --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
     --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
@@ -201,6 +240,7 @@ implemented; a `GET /mcp` returns 405.)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `MQTT_CONFIG_FILE` | _(auto)_ | YAML config file path (else `mqtt_server.yaml` in cwd) |
 | `MQTT_LISTEN_ADDR` | `0.0.0.0:1883` | MQTT listener bind address |
 | `MQTT_TLS_CERT` / `MQTT_TLS_KEY` | _(unset)_ | PEM cert + key; both set = TLS on the MQTT port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
