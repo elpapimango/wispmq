@@ -3,6 +3,7 @@
 [![CI](https://github.com/elpapimango/mqtt_server/actions/workflows/ci.yml/badge.svg)](https://github.com/elpapimango/mqtt_server/actions/workflows/ci.yml)
 [![Docker](https://github.com/elpapimango/mqtt_server/actions/workflows/docker.yml/badge.svg)](https://github.com/elpapimango/mqtt_server/actions/workflows/docker.yml)
 [![Container image](https://img.shields.io/badge/ghcr.io-mqtt__server-2496ed?logo=docker&logoColor=white)](https://github.com/elpapimango/mqtt_server/pkgs/container/mqtt_server)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 An **MQTT broker** written in Rust, built directly from the
 [OASIS MQTT Version 5.0 specification](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)
