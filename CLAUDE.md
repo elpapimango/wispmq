@@ -4,11 +4,17 @@ Guidance for working in this repository.
 
 ## Project
 
-An **MQTT broker** in Rust (protocols **v5.0**, **v3.1.1**, **v3.1**), built
-from the OASIS specs (in `spec/`). Async networking via **Tokio**; durable state
-in **SQLite** (bundled via `rusqlite`). Single binary `pulsemq` plus a
-library crate. Transports: TCP, TLS, mutual TLS, WebSockets, WebSockets-over-TLS.
-Repo: https://github.com/elpapimango/pulsemq
+**PulseMQ** — an **MQTT broker** in Rust (protocols **v5.0**, **v3.1.1**,
+**v3.1**), built from the OASIS specs (in `spec/`). Async networking via
+**Tokio**; durable state in **SQLite** (bundled via `rusqlite`). Single binary
+`pulsemq` (crate `pulsemq`) plus a library crate. Transports: TCP, TLS, mutual
+TLS, WebSockets, WebSockets-over-TLS. Repo:
+https://github.com/elpapimango/pulsemq
+
+Display name is **PulseMQ**; the identifier everywhere (crate, binary, image,
+repo, default `pulsemq.yaml`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
+metric names are intentionally kept — they describe the protocol, not the
+project.
 
 ## Commands
 
@@ -123,7 +129,9 @@ each layer — extend them.
 Multi-stage `Dockerfile` (cached release build → `debian-slim` runtime, non-root
 uid 10001, state on `/data`, HEALTHCHECK on `/health`). `docker-compose.yml` is
 an example. `.github/workflows/docker.yml` builds and pushes to
-`ghcr.io/elpapimango/pulsemq` on pushes to `main` and `v*` tags. There are
+`ghcr.io/elpapimango/pulsemq` on pushes to `main` and `v*` tags, with
+`provenance: false` so each tag is a single image manifest (no attestation
+child manifests → no untagged versions cluttering the GHCR package). There are
 two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml` (image).
 
 ## Conventions
