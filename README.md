@@ -29,6 +29,8 @@ Implements the full MQTT v5.0 control-packet set and the core broker behaviour:
 - **Admin HTTP server** on a separate port with a **health check**, a
   **Prometheus** metrics endpoint, and a **Model Context Protocol (MCP)** server
   exposing read-only broker-introspection tools.
+- **Transports**: plain TCP, TLS, mutual TLS, and **WebSockets** (plain and
+  over TLS), all sharing the same MQTT session/routing core.
 
 ## Architecture
 
@@ -48,6 +50,7 @@ The code is layered so each concern maps to the spec section it implements:
 | `metrics` | Atomic counters + Prometheus/JSON snapshot | — |
 | `admin` | HTTP server: health, Prometheus metrics, MCP | — |
 | `tls` | rustls `TlsAcceptor` from PEM cert/key + client-cert CN | — |
+| `ws` | WebSocket transport: `mqtt`-subprotocol handshake + byte-stream adapter | §6 |
 | `acl` | Per-identity publish/subscribe authorization | — |
 
 **Concurrency.** All shared state lives behind a single `std::sync::Mutex`.
@@ -87,6 +90,11 @@ MQTT TLS:
     --tls-cert <FILE>             PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
     --tls-key <FILE>              PEM private key for the MQTT port [MQTT_TLS_KEY]
     --tls-client-ca <FILE>        PEM CA bundle; enables mutual TLS [MQTT_TLS_CLIENT_CA]
+MQTT OVER WEBSOCKETS:
+    --ws-listen-addr <ADDR>       Enable the WebSocket listener [MQTT_WS_LISTEN_ADDR]
+    --ws-tls-cert <FILE>          PEM certificate chain for the WS port [MQTT_WS_TLS_CERT]
+    --ws-tls-key <FILE>           PEM private key for the WS port [MQTT_WS_TLS_KEY]
+    --ws-tls-client-ca <FILE>     PEM CA bundle; enables mutual TLS [MQTT_WS_TLS_CLIENT_CA]
 ADMIN TLS & AUTH:
     --admin-tls-cert <FILE>       PEM certificate chain for the admin port [MQTT_ADMIN_TLS_CERT]
     --admin-tls-key <FILE>        PEM private key for the admin port [MQTT_ADMIN_TLS_KEY]
@@ -196,6 +204,10 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_LISTEN_ADDR` | `0.0.0.0:1883` | MQTT listener bind address |
 | `MQTT_TLS_CERT` / `MQTT_TLS_KEY` | _(unset)_ | PEM cert + key; both set = TLS on the MQTT port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
+| `MQTT_WS_LISTEN_ADDR` | _(unset)_ | Enables the MQTT-over-WebSocket listener |
+| `MQTT_WS_TLS_CERT` / `MQTT_WS_TLS_KEY` | _(unset)_ | PEM cert + key; both set = wss on the WS port |
+| `MQTT_WS_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the WS port |
+| `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
 | `MQTT_ADMIN_ADDR` | `127.0.0.1:9001` | Admin/metrics/MCP HTTP bind address |
 | `MQTT_ADMIN_TLS_CERT` / `MQTT_ADMIN_TLS_KEY` | _(unset)_ | PEM cert + key; both set = HTTPS on the admin port |
 | `MQTT_ADMIN_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the admin port |
@@ -207,11 +219,40 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_MAX_SESSION_EXPIRY` | `3600` | Cap on Session Expiry Interval (s) |
 | `RUST_LOG` | `info` | Log level (`tracing` filter) |
 
+### Transports
+
+The broker accepts MQTT over several transports, all feeding the same session
+and routing core:
+
+| Mode | How to enable |
+|------|---------------|
+| Plain MQTT (TCP) | default (`--listen-addr`) |
+| MQTT over TLS | `--listen-addr` + `--tls-cert` + `--tls-key` |
+| MQTT over TLS with client certificate (mTLS) | add `--tls-client-ca` |
+| MQTT over WebSockets | `--ws-listen-addr` |
+| MQTT over WebSockets with TLS (wss) | `--ws-listen-addr` + `--ws-tls-cert` + `--ws-tls-key` (add `--ws-tls-client-ca` for mTLS) |
+
+The raw-MQTT port and the WebSocket port are independent and can run at the same
+time. WebSocket connections carry MQTT Control Packets in binary frames and
+negotiate the `mqtt` subprotocol (spec §6); packet boundaries need not align
+with frame boundaries. TLS termination and client-certificate identity (CN)
+work identically on both transports.
+
+```bash
+# Plain MQTT on 1883 and MQTT-over-WebSockets on 8080, together:
+./target/release/mqtt_server --listen-addr 0.0.0.0:1883 --ws-listen-addr 0.0.0.0:8080
+
+# WebSockets over TLS (wss):
+./target/release/mqtt_server \
+  --ws-listen-addr 0.0.0.0:8443 --ws-tls-cert cert.pem --ws-tls-key key.pem
+```
+
 ### TLS
 
-Both listeners support native TLS (rustls; no OpenSSL needed at runtime). TLS
-is enabled per-port by pointing at a PEM certificate chain and private key —
-the two ports are independent and may use the same or different certificates.
+Both MQTT transports (and the admin server) support native TLS (rustls; no
+OpenSSL needed at runtime). TLS is enabled per-listener by pointing at a PEM
+certificate chain and private key — the listeners are independent and may use
+the same or different certificates.
 
 ```bash
 # self-signed cert for local testing
@@ -367,7 +408,7 @@ are written to disk; clean sessions live purely in memory.
 
 ## Limitations
 
-Intentionally out of scope for this implementation: WebSocket transport,
+Intentionally out of scope for this implementation:
 extended AUTH (SCRAM/challenge-response — AUTH is accepted as a no-op),
 username/password authentication (identity comes from the mutual-TLS client
 certificate CN), `$SYS` topics, and outbound topic-alias assignment (the server

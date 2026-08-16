@@ -17,6 +17,11 @@ serde_json = "1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls-pemfile = "2"
 x509-parser = "0.16"
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+rcgen = "0.14"
 
 [profile.release]
 lto = true

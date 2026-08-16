@@ -26,6 +26,16 @@ pub struct Config {
     /// PEM CA bundle used to verify client certificates on the MQTT port. When
     /// set, mutual TLS is enforced (clients must present a trusted certificate).
     pub tls_client_ca: Option<String>,
+    /// Address for the MQTT-over-WebSocket listener. When `None`, WebSocket
+    /// support is disabled. Carries MQTT in binary frames (subprotocol `mqtt`).
+    pub ws_listen_addr: Option<SocketAddr>,
+    /// PEM certificate chain / private key for TLS on the WebSocket port. When
+    /// both are set the WebSocket listener speaks TLS (wss://).
+    pub ws_tls_cert: Option<String>,
+    pub ws_tls_key: Option<String>,
+    /// PEM CA bundle used to verify client certificates on the WebSocket port.
+    /// When set, mutual TLS is enforced.
+    pub ws_tls_client_ca: Option<String>,
     /// PEM certificate chain / private key for TLS on the admin port. When both
     /// are set the admin server speaks HTTPS.
     pub admin_tls_cert: Option<String>,
@@ -64,6 +74,10 @@ impl Default for Config {
             tls_cert: None,
             tls_key: None,
             tls_client_ca: None,
+            ws_listen_addr: None,
+            ws_tls_cert: None,
+            ws_tls_key: None,
+            ws_tls_client_ca: None,
             admin_tls_cert: None,
             admin_tls_key: None,
             admin_tls_client_ca: None,
@@ -103,6 +117,14 @@ impl Config {
         cfg.tls_cert = non_empty_env("MQTT_TLS_CERT");
         cfg.tls_key = non_empty_env("MQTT_TLS_KEY");
         cfg.tls_client_ca = non_empty_env("MQTT_TLS_CLIENT_CA");
+        if let Some(v) = non_empty_env("MQTT_WS_LISTEN_ADDR") {
+            if let Ok(addr) = v.parse() {
+                cfg.ws_listen_addr = Some(addr);
+            }
+        }
+        cfg.ws_tls_cert = non_empty_env("MQTT_WS_TLS_CERT");
+        cfg.ws_tls_key = non_empty_env("MQTT_WS_TLS_KEY");
+        cfg.ws_tls_client_ca = non_empty_env("MQTT_WS_TLS_CLIENT_CA");
         cfg.admin_tls_cert = non_empty_env("MQTT_ADMIN_TLS_CERT");
         cfg.admin_tls_key = non_empty_env("MQTT_ADMIN_TLS_KEY");
         cfg.admin_tls_client_ca = non_empty_env("MQTT_ADMIN_TLS_CLIENT_CA");
@@ -167,6 +189,15 @@ MQTT TLS:
     --tls-client-ca <FILE>        PEM CA bundle; enables mutual TLS on the MQTT
                                   port (clients must present a trusted cert)
                                   [MQTT_TLS_CLIENT_CA]
+
+MQTT OVER WEBSOCKETS:
+    --ws-listen-addr <ADDR>       Enable the WebSocket listener on this address
+                                  (subprotocol \"mqtt\") [MQTT_WS_LISTEN_ADDR]
+    --ws-tls-cert <FILE>          PEM certificate chain for the WS port (wss://)
+                                  [MQTT_WS_TLS_CERT]
+    --ws-tls-key <FILE>           PEM private key for the WS port [MQTT_WS_TLS_KEY]
+    --ws-tls-client-ca <FILE>     PEM CA bundle; enables mutual TLS on the WS
+                                  port [MQTT_WS_TLS_CLIENT_CA]
 
 ADMIN TLS & AUTH:
     --admin-tls-cert <FILE>       PEM certificate chain for the admin port [MQTT_ADMIN_TLS_CERT]
@@ -242,6 +273,12 @@ impl Config {
                 "--tls-cert" => self.tls_cert = Some(value(&mut i)?),
                 "--tls-key" => self.tls_key = Some(value(&mut i)?),
                 "--tls-client-ca" => self.tls_client_ca = Some(value(&mut i)?),
+                "--ws-listen-addr" => {
+                    self.ws_listen_addr = Some(parse_addr(&value(&mut i)?, "--ws-listen-addr")?)
+                }
+                "--ws-tls-cert" => self.ws_tls_cert = Some(value(&mut i)?),
+                "--ws-tls-key" => self.ws_tls_key = Some(value(&mut i)?),
+                "--ws-tls-client-ca" => self.ws_tls_client_ca = Some(value(&mut i)?),
                 "--admin-tls-cert" => self.admin_tls_cert = Some(value(&mut i)?),
                 "--admin-tls-key" => self.admin_tls_key = Some(value(&mut i)?),
                 "--admin-tls-client-ca" => self.admin_tls_client_ca = Some(value(&mut i)?),

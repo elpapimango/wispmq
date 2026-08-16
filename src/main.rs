@@ -75,6 +75,16 @@ async fn main() -> Result<()> {
         }
     });
 
+    // MQTT-over-WebSocket listener, if configured.
+    if broker.config().ws_listen_addr.is_some() {
+        let ws_broker = broker.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::run_ws(ws_broker).await {
+                tracing::error!("WebSocket listener stopped: {e}");
+            }
+        });
+    }
+
     // Reload the ACL policy on SIGHUP (Unix). The rest of the broker keeps
     // running; a bad policy file is reported and the previous one is kept.
     #[cfg(unix)]

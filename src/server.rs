@@ -74,6 +74,67 @@ pub async fn run(broker: Broker) -> Result<()> {
     }
 }
 
+/// Bind and serve MQTT over WebSockets until the process is stopped. Requires
+/// `config.ws_listen_addr` to be set.
+pub async fn run_ws(broker: Broker) -> Result<()> {
+    let cfg = broker.config();
+    let Some(addr) = cfg.ws_listen_addr else {
+        return Ok(());
+    };
+    let acceptor = crate::tls::maybe_acceptor(
+        &cfg.ws_tls_cert,
+        &cfg.ws_tls_key,
+        &cfg.ws_tls_client_ca,
+        "websocket",
+    )?;
+    let mode = match (acceptor.is_some(), cfg.ws_tls_client_ca.is_some()) {
+        (true, true) => " (TLS, mutual: client certificate required)",
+        (true, false) => " (TLS)",
+        _ => "",
+    };
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!("MQTT-over-WebSocket listening on {addr}{mode}");
+
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let broker = broker.clone();
+        let acceptor = acceptor.clone();
+        tokio::spawn(async move {
+            stream.set_nodelay(true).ok();
+            // Terminate TLS (if configured), then perform the WebSocket
+            // handshake and wrap the connection as an MQTT byte stream.
+            let result = match acceptor {
+                Some(acceptor) => match acceptor.accept(stream).await {
+                    Ok(tls) => {
+                        let identity = crate::tls::peer_cn(tls.get_ref().1.peer_certificates());
+                        match crate::ws::accept(tls).await {
+                            Ok(ws) => handle_connection(ws, peer, broker, identity).await,
+                            Err(e) => {
+                                tracing::debug!("WebSocket handshake with {peer} failed: {e}");
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("TLS handshake with {peer} failed: {e}");
+                        return;
+                    }
+                },
+                None => match crate::ws::accept(stream).await {
+                    Ok(ws) => handle_connection(ws, peer, broker, None).await,
+                    Err(e) => {
+                        tracing::debug!("WebSocket handshake with {peer} failed: {e}");
+                        return;
+                    }
+                },
+            };
+            if let Err(e) = result {
+                tracing::debug!("WebSocket connection {peer} ended: {e}");
+            }
+        });
+    }
+}
+
 async fn handle_connection<S>(
     stream: S,
     peer: SocketAddr,

@@ -26,3 +26,4 @@ pub mod storage;
 pub mod tls;
 pub mod topic;
 pub mod types;
+pub mod ws;
