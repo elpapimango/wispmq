@@ -108,6 +108,12 @@ db_path: "mqtt_broker.db"
 max_packet_size: 1048576
 receive_maximum: 64
 max_session_expiry: 3600
+
+# advertised in CONNACK
+maximum_qos: 2                       # 0, 1, or 2
+retain_available: true
+topic_alias_maximum: 16
+# server_keep_alive: 60              # override the client's Keep Alive
 ```
 
 ## Command-line options
@@ -146,6 +152,11 @@ STORAGE & LIMITS:
     --max-packet-size <BYTES>     Maximum accepted packet size [MQTT_MAX_PACKET_SIZE]
     --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
     --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
+PROTOCOL CAPABILITIES:
+    --maximum-qos <0|1|2>         Highest QoS supported [MQTT_MAXIMUM_QOS]
+    --retain-available <BOOL>     Retained messages supported [MQTT_RETAIN_AVAILABLE]
+    --topic-alias-maximum <N>     Topic Alias Maximum [MQTT_TOPIC_ALIAS_MAXIMUM]
+    --server-keep-alive <SECS>    Override client Keep Alive [MQTT_SERVER_KEEP_ALIVE]
 OTHER:
     -h, --help                    Print help and exit
     -V, --version                 Print version and exit
@@ -257,6 +268,10 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_MAX_PACKET_SIZE` | `1048576` | Max accepted packet size (bytes) |
 | `MQTT_RECEIVE_MAXIMUM` | `64` | Server Receive Maximum |
 | `MQTT_MAX_SESSION_EXPIRY` | `3600` | Cap on Session Expiry Interval (s) |
+| `MQTT_MAXIMUM_QOS` | `2` | Highest QoS the server supports (0/1/2) |
+| `MQTT_RETAIN_AVAILABLE` | `true` | Whether retained messages are supported |
+| `MQTT_TOPIC_ALIAS_MAXIMUM` | `16` | Topic Alias Maximum granted to clients |
+| `MQTT_SERVER_KEEP_ALIVE` | _(unset)_ | Override the client's Keep Alive (s) |
 | `RUST_LOG` | `info` | Log level (`tracing` filter) |
 
 ### Transports

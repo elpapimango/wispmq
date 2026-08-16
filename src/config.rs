@@ -28,6 +28,10 @@ const KNOWN_YAML_KEYS: &[&str] = &[
     "max_packet_size",
     "receive_maximum",
     "max_session_expiry",
+    "maximum_qos",
+    "retain_available",
+    "topic_alias_maximum",
+    "server_keep_alive",
 ];
 
 /// Default config-file names looked for in the working directory.
@@ -190,6 +194,28 @@ impl Config {
                 self.max_session_expiry = n;
             }
         }
+        if let Some(q) = non_empty_env("MQTT_MAXIMUM_QOS")
+            .as_deref()
+            .and_then(parse_qos_value)
+        {
+            self.maximum_qos = q;
+        }
+        if let Some(b) = non_empty_env("MQTT_RETAIN_AVAILABLE")
+            .as_deref()
+            .and_then(parse_bool_value)
+        {
+            self.retain_available = b;
+        }
+        if let Some(v) = non_empty_env("MQTT_TOPIC_ALIAS_MAXIMUM") {
+            if let Ok(n) = v.parse() {
+                self.topic_alias_maximum = n;
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_SERVER_KEEP_ALIVE") {
+            if let Ok(n) = v.parse() {
+                self.server_keep_alive = Some(n);
+            }
+        }
     }
 }
 
@@ -335,6 +361,31 @@ impl Config {
                 MqttError::Config(format!("{source}: receive_maximum out of range (0-65535)"))
             })?;
         }
+        if let Some(n) = y_i64(doc, "topic_alias_maximum", source)? {
+            self.topic_alias_maximum = u16::try_from(n).map_err(|_| {
+                MqttError::Config(format!(
+                    "{source}: topic_alias_maximum out of range (0-65535)"
+                ))
+            })?;
+        }
+        if let Some(n) = y_i64(doc, "server_keep_alive", source)? {
+            self.server_keep_alive = Some(u16::try_from(n).map_err(|_| {
+                MqttError::Config(format!(
+                    "{source}: server_keep_alive out of range (0-65535)"
+                ))
+            })?);
+        }
+        if let Some(n) = y_i64(doc, "maximum_qos", source)? {
+            self.maximum_qos = u8::try_from(n)
+                .ok()
+                .and_then(|b| QoS::from_u8(b).ok())
+                .ok_or_else(|| {
+                    MqttError::Config(format!("{source}: maximum_qos must be 0, 1, or 2"))
+                })?;
+        }
+        if let Some(b) = y_bool(doc, "retain_available", source)? {
+            self.retain_available = b;
+        }
 
         Ok(())
     }
@@ -388,6 +439,20 @@ fn y_i64(doc: &Yaml, key: &str, source: &str) -> Result<Option<i64>> {
         Some(n) => Ok(Some(n)),
         None => Err(MqttError::Config(format!(
             "{source}: key '{key}' must be an integer"
+        ))),
+    }
+}
+
+/// Read a boolean value from a YAML mapping, erroring on a wrong type.
+fn y_bool(doc: &Yaml, key: &str, source: &str) -> Result<Option<bool>> {
+    let v = &doc[key];
+    if v.is_badvalue() || v.is_null() {
+        return Ok(None);
+    }
+    match v.as_bool() {
+        Some(b) => Ok(Some(b)),
+        None => Err(MqttError::Config(format!(
+            "{source}: key '{key}' must be a boolean (true/false)"
         ))),
     }
 }
@@ -479,6 +544,16 @@ STORAGE & LIMITS:
     --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
                                   (default 3600)
 
+PROTOCOL CAPABILITIES (advertised in CONNACK):
+    --maximum-qos <0|1|2>         Highest QoS the server supports [MQTT_MAXIMUM_QOS]
+                                  (default 2)
+    --retain-available <BOOL>     Whether retained messages are supported
+                                  [MQTT_RETAIN_AVAILABLE] (default true)
+    --topic-alias-maximum <N>     Topic Alias Maximum granted to clients
+                                  [MQTT_TOPIC_ALIAS_MAXIMUM] (default 16)
+    --server-keep-alive <SECS>    Override the client's Keep Alive
+                                  [MQTT_SERVER_KEEP_ALIVE] (default: honour client)
+
 OTHER:
     -h, --help                    Print this help and exit
     -V, --version                 Print version and exit
@@ -547,6 +622,19 @@ impl Config {
                 "--max-session-expiry" => {
                     self.max_session_expiry = parse_num(&value(&mut i)?, "--max-session-expiry")?
                 }
+                "--maximum-qos" => {
+                    self.maximum_qos = parse_qos_arg(&value(&mut i)?, "--maximum-qos")?
+                }
+                "--retain-available" => {
+                    self.retain_available = parse_bool_arg(&value(&mut i)?, "--retain-available")?
+                }
+                "--topic-alias-maximum" => {
+                    self.topic_alias_maximum = parse_num(&value(&mut i)?, "--topic-alias-maximum")?
+                }
+                "--server-keep-alive" => {
+                    self.server_keep_alive =
+                        Some(parse_num(&value(&mut i)?, "--server-keep-alive")?)
+                }
                 other => {
                     return Err(MqttError::Config(format!(
                         "unknown option: {other}\n\nRun with --help to list available options."
@@ -567,6 +655,31 @@ fn parse_addr(v: &str, flag: &str) -> Result<SocketAddr> {
 fn parse_num<T: std::str::FromStr>(v: &str, flag: &str) -> Result<T> {
     v.parse()
         .map_err(|_| MqttError::Config(format!("{flag}: invalid number {v:?}")))
+}
+
+/// Parse a Maximum QoS value (0, 1, or 2). Lenient: returns `None` on garbage.
+fn parse_qos_value(v: &str) -> Option<QoS> {
+    v.trim()
+        .parse::<u8>()
+        .ok()
+        .and_then(|n| QoS::from_u8(n).ok())
+}
+
+/// Parse a boolean from common spellings. Lenient: returns `None` on garbage.
+fn parse_bool_value(v: &str) -> Option<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_qos_arg(v: &str, flag: &str) -> Result<QoS> {
+    parse_qos_value(v).ok_or_else(|| MqttError::Config(format!("{flag}: expected 0, 1, or 2")))
+}
+
+fn parse_bool_arg(v: &str, flag: &str) -> Result<bool> {
+    parse_bool_value(v).ok_or_else(|| MqttError::Config(format!("{flag}: expected true or false")))
 }
 
 #[cfg(test)]
@@ -665,6 +778,52 @@ max_session_expiry: 600
             .is_err());
         let mut cfg = Config::default();
         assert!(cfg.apply_yaml_str("- a\n- b\n", "t.yaml").is_err());
+    }
+
+    #[test]
+    fn yaml_protocol_capabilities() {
+        let yaml = "maximum_qos: 1\nretain_available: false\ntopic_alias_maximum: 5\nserver_keep_alive: 30\n";
+        let mut cfg = Config::default();
+        cfg.apply_yaml_str(yaml, "t.yaml").unwrap();
+        assert_eq!(cfg.maximum_qos, QoS::AtLeastOnce);
+        assert!(!cfg.retain_available);
+        assert_eq!(cfg.topic_alias_maximum, 5);
+        assert_eq!(cfg.server_keep_alive, Some(30));
+
+        // Out-of-range QoS is rejected.
+        let mut bad = Config::default();
+        assert!(bad.apply_yaml_str("maximum_qos: 3\n", "t.yaml").is_err());
+        // Wrong type for a boolean is rejected.
+        let mut bad = Config::default();
+        assert!(bad
+            .apply_yaml_str("retain_available: \"yes\"\n", "t.yaml")
+            .is_err());
+    }
+
+    #[test]
+    fn cli_protocol_capabilities() {
+        let args: Vec<String> = [
+            "--maximum-qos",
+            "0",
+            "--retain-available",
+            "false",
+            "--server-keep-alive",
+            "45",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let cfg = match Config::default().apply_args(&args).unwrap() {
+            Startup::Run(c) => *c,
+            Startup::Exit => panic!("unexpected exit"),
+        };
+        assert_eq!(cfg.maximum_qos, QoS::AtMostOnce);
+        assert!(!cfg.retain_available);
+        assert_eq!(cfg.server_keep_alive, Some(45));
+        // Invalid QoS on the CLI is a hard error.
+        assert!(Config::default()
+            .apply_args(&["--maximum-qos".into(), "9".into()])
+            .is_err());
     }
 
     #[test]

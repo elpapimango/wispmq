@@ -32,3 +32,9 @@ db_path: "mqtt_broker.db"
 max_packet_size: 1048576             # bytes
 receive_maximum: 64                  # concurrent unacked QoS>0 publications
 max_session_expiry: 3600             # seconds
+
+# --- Protocol capabilities (advertised to clients in CONNACK) ---
+maximum_qos: 2                       # 0, 1, or 2
+retain_available: true
+topic_alias_maximum: 16
+# server_keep_alive: 60              # override the client's Keep Alive (seconds)
