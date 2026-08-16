@@ -177,3 +177,100 @@ the `load/*` topics are mainly for $SYS parity.
 - [ ] Per-control-packet received/sent counters are correct (unit/integration
       test), and the `$SYS`↔Prometheus values agree.
 - [ ] README metrics + $SYS sections and `pulsemq.example.yaml` updated.
+
+---
+
+## 3. Switch the config file format from YAML to JSON
+
+Replace the YAML config file with **JSON**. Rationale: one config format across
+the project (the ACL policy is already JSON), `serde_json` is already a
+dependency, and it lets us drop `yaml-rust2`.
+
+### Scope
+- **Parsing** (`config.rs`): swap `apply_yaml_str` for `apply_json_str` using
+  `serde_json::Value` (mirror the manual, validated extraction already used in
+  `acl.rs`). Keep the strict unknown-key check (rename `KNOWN_YAML_KEYS` →
+  `KNOWN_KEYS`) and the type/range validation. Precedence is unchanged:
+  **defaults < config file < env < CLI**.
+- **Bridges** (`bridge.rs`): change `parse_bridges(&Yaml, …)` to take a
+  `&serde_json::Value`; update the `bridges` array + `topics` parsing.
+- **Discovery / naming**: default files become `pulsemq.json` (drop
+  `pulsemq.yaml`/`.yml`); `--config` / `MQTT_CONFIG_FILE` still point anywhere.
+  Update `DEFAULT_CONFIG_FILES` and the `--help`/README wording.
+- **Example + ignore**: rename `pulsemq.example.yaml` → `pulsemq.example.json`;
+  update `.gitignore` (`pulsemq.yaml`/`.yml` → `pulsemq.json`) and `.dockerignore`.
+- **Dependency**: remove `yaml-rust2` from `Cargo.toml` once nothing imports it.
+- **Docs**: README "Configuration" section + the config table, `CLAUDE.md`
+  (default file name, the "wire an option everywhere" checklist), and any
+  YAML snippets → JSON.
+- **Tests**: the `config` unit tests use YAML strings — convert to JSON, keeping
+  the same cases (field application, CLI-over-file precedence, unknown-key and
+  wrong-type rejection, empty/comment file, protocol caps, bridges).
+
+### Caveat — comments
+JSON has no comments, so the current heavily-commented example can't carry inline
+docs. Options (pick one, note it in the PR):
+- Ship a plain `pulsemq.example.json` and move the field docs to the README
+  (recommended — the README already documents every option), **or**
+- Accept JSONC/JSON5 (a `//`-comment-tolerant parser) so the example can stay
+  annotated — heavier, adds a dep; probably not worth it.
+
+Keep it strict JSON unless there's a strong reason otherwise.
+
+### Acceptance criteria
+- [ ] `pulsemq.json` (auto-discovered) and `--config file.json` load correctly;
+      precedence file < env < CLI holds (live check + unit tests).
+- [ ] Unknown keys and wrong types are rejected with a clear message.
+- [ ] Bridges parse from JSON; the bridge integration test still passes.
+- [ ] `yaml-rust2` removed; `cargo fmt`/`clippy -D warnings`/`test` all green.
+- [ ] README, CLAUDE.md, example file, and ignore files updated; no lingering
+      references to `pulsemq.yaml` / YAML config.
+
+---
+
+## 4. Parse command-line options with `clap`
+
+Replace the hand-rolled argument parser (`apply_args` + the `HELP` string
+constant in `config.rs`) with **`clap`** (derive API). Motivation: generated
+`--help`/`--version`, automatic validation and error messages, subcommand
+support, and less bespoke string-matching to maintain.
+
+### Scope
+- Add `clap` (with the `derive` feature) to `Cargo.toml`. Keep the surface small
+  — no extra plugins.
+- Define a `#[derive(Parser)]` `Cli` struct whose fields mirror every current
+  flag (`--listen-addr`, `--ws-listen-addr`, `--admin-addr`, all TLS paths,
+  `--password-file`, `--allow-anonymous`, `--acl-file`, `--db-path`,
+  `--max-packet-size`, `--receive-maximum`, `--max-session-expiry`,
+  `--maximum-qos`, `--retain-available`, `--topic-alias-maximum`,
+  `--server-keep-alive`, `--config`, …). Preserve the **exact flag names** so
+  existing invocations and docs keep working.
+- Make CLI options `Option<T>` so "unset" is distinguishable — the layering
+  (`defaults < file < env < CLI`) must be preserved: only apply a CLI value when
+  the user actually passed it. `clap`'s env integration is tempting but would
+  collapse our env layer into CLI; **keep env handling in `apply_env`** so the
+  precedence order stays intact (or verify clap's `.env()` yields identical
+  ordering before adopting it).
+- Fold the `--hash-password <USER>` and any other one-shot commands into a clap
+  **subcommand** (e.g. `pulsemq hash-password <user>`) or an `Option<String>`
+  flag — match current behavior (reads password from stdin, prints the line).
+- Drop the `HELP` constant; let clap generate help/usage. Wire `--version` from
+  `CARGO_PKG_VERSION`.
+- `Config::load()` keeps its shape: build `Cli` via `Cli::parse()`, then apply
+  onto the config after defaults/file/env.
+
+### Docs & tests
+- Update the README (any literal `--help` output block) and `CLAUDE.md`
+  (the "wire an option everywhere" checklist — `apply_args` + HELP becomes "add a
+  field to the clap `Cli` struct").
+- The `config` unit tests build args as `Vec<String>`; adapt them to
+  `Cli::try_parse_from([...])`. Keep coverage of precedence (CLI overrides file
+  and env) and of parse errors (bad value → nonzero exit / `Err`).
+
+### Acceptance criteria
+- [ ] Every existing flag works with the same name and semantics; `--help` and
+      `--version` are generated by clap.
+- [ ] Precedence defaults < file < env < CLI is unchanged (unit tests prove CLI
+      wins over env which wins over file).
+- [ ] `hash-password` still works.
+- [ ] `cargo fmt`/`clippy -D warnings`/`test` green; README + CLAUDE.md updated.
