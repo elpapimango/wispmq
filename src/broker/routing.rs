@@ -18,17 +18,27 @@ impl Broker {
             return false;
         }
 
-        struct Plan {
+        /// A shared-subscription candidate, held until the whole group is known.
+        struct Candidate {
             client_id: String,
             qos: QoS,
             retain: bool,
             sub_ids: Vec<u32>,
         }
-        let mut plans: Vec<Plan> = Vec::new();
-        // Shared groups: (share, filter) -> candidate deliveries.
-        let mut shared: HashMap<(String, String), Vec<Plan>> = HashMap::new();
+        // Shared groups: (share, filter) -> candidates. `HashMap::new` does not
+        // allocate, so this costs nothing until a shared subscription matches.
+        let mut shared: HashMap<(String, String), Vec<Candidate>> = HashMap::new();
 
-        for (cid, session) in st.sessions.iter() {
+        let max_queued = self.inner.config.max_queued_messages as usize;
+        let mut delivered = 0u64;
+        let mut dropped = 0u64;
+
+        // Ordinary subscriptions are delivered in this single pass: `iter_mut`
+        // hands over the session mutably, so nothing needs to be cloned into a
+        // plan list and re-looked-up afterwards. Only shared subscriptions
+        // still need two phases, because the round-robin choice depends on the
+        // whole group and the cursor lives in `State` next to the sessions.
+        for (cid, session) in st.sessions.iter_mut() {
             let mut best: Option<QoS> = None;
             let mut sub_ids: Vec<u32> = Vec::new();
             let mut retain_flag = false;
@@ -37,20 +47,18 @@ impl Broker {
                 if !topic::matches(&sub.filter, &message.topic) {
                     continue;
                 }
+                // No Local: do not echo back to the publishing client (3.8.3.1).
+                // Applies to shared and ordinary subscriptions alike.
+                if sub.no_local && publisher == Some(cid.as_str()) {
+                    continue;
+                }
+                let eff = message.qos.min(sub.qos);
                 if let Some(share) = &sub.share_name {
-                    // Shared subscription candidate (one member chosen later).
-                    if sub.no_local && publisher == Some(cid.as_str()) {
-                        continue;
-                    }
-                    let eff = message.qos.min(sub.qos);
-                    let ids = sub
-                        .subscription_identifier
-                        .map(|i| vec![i])
-                        .unwrap_or_default();
+                    // Shared subscription candidate (one member chosen below).
                     shared
                         .entry((share.clone(), sub.filter.clone()))
                         .or_default()
-                        .push(Plan {
+                        .push(Candidate {
                             client_id: cid.clone(),
                             qos: eff,
                             retain: if sub.retain_as_published {
@@ -58,15 +66,13 @@ impl Broker {
                             } else {
                                 false
                             },
-                            sub_ids: ids,
+                            sub_ids: sub
+                                .subscription_identifier
+                                .map(|i| vec![i])
+                                .unwrap_or_default(),
                         });
                     continue;
                 }
-                // No Local: do not echo back to the publishing client (3.8.3.1).
-                if sub.no_local && publisher == Some(cid.as_str()) {
-                    continue;
-                }
-                let eff = message.qos.min(sub.qos);
                 best = Some(match best {
                     Some(b) if b.as_u8() >= eff.as_u8() => b,
                     _ => eff,
@@ -80,48 +86,42 @@ impl Broker {
             }
 
             if let Some(qos) = best {
-                plans.push(Plan {
-                    client_id: cid.clone(),
-                    qos,
-                    retain: if retain_flag { message.retain } else { false },
-                    sub_ids,
-                });
-            }
-        }
-
-        // Choose one member per shared group (round-robin).
-        for ((share, filter), mut candidates) in shared {
-            if candidates.is_empty() {
-                continue;
-            }
-            let cursor = st.shared_rr.entry((share, filter)).or_insert(0);
-            let idx = *cursor % candidates.len();
-            *cursor = cursor.wrapping_add(1);
-            plans.push(candidates.swap_remove(idx));
-        }
-
-        let matched = !plans.is_empty();
-        Metrics::add(&self.inner.metrics.publish_delivered, plans.len() as u64);
-        let max_queued = self.inner.config.max_queued_messages as usize;
-        let mut dropped = 0u64;
-        for plan in plans {
-            if let Some(session) = st.sessions.get_mut(&plan.client_id) {
-                if deliver_to_session(
-                    session,
-                    message,
-                    plan.qos,
-                    plan.retain,
-                    &plan.sub_ids,
-                    max_queued,
-                ) {
+                delivered += 1;
+                let retain = if retain_flag { message.retain } else { false };
+                if deliver_to_session(session, message, qos, retain, &sub_ids, max_queued) {
                     dropped += 1;
                 }
             }
         }
+
+        // Choose one member per shared group (round-robin), then deliver.
+        if !shared.is_empty() {
+            let mut chosen: Vec<Candidate> = Vec::with_capacity(shared.len());
+            for ((share, filter), mut candidates) in shared {
+                if candidates.is_empty() {
+                    continue;
+                }
+                let cursor = st.shared_rr.entry((share, filter)).or_insert(0);
+                let idx = *cursor % candidates.len();
+                *cursor = cursor.wrapping_add(1);
+                chosen.push(candidates.swap_remove(idx));
+            }
+            delivered += chosen.len() as u64;
+            for c in chosen {
+                if let Some(session) = st.sessions.get_mut(&c.client_id) {
+                    if deliver_to_session(session, message, c.qos, c.retain, &c.sub_ids, max_queued)
+                    {
+                        dropped += 1;
+                    }
+                }
+            }
+        }
+
+        Metrics::add(&self.inner.metrics.publish_delivered, delivered);
         if dropped > 0 {
             Metrics::add(&self.inner.metrics.publish_dropped, dropped);
         }
-        matched
+        delivered > 0
     }
 }
 

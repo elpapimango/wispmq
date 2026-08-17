@@ -492,18 +492,29 @@ mod tests {
             let (storage, loaded) = Storage::open(&path_str).unwrap();
             assert!(loaded.retained.is_empty(), "fresh db should be empty");
             storage.upsert_retained(message.topic.clone(), message.clone());
-            // Dropping the handle closes the command channel, and the writer
-            // thread drains what is queued before exiting, so the row is on
-            // disk by the time the reopen below runs.
             drop(storage);
         }
 
-        let (_storage, loaded) = Storage::open(&path_str).unwrap();
-        let (_, restored) = loaded
-            .retained
-            .iter()
-            .find(|(topic, _)| topic == "sensors/kitchen")
-            .expect("retained message should have been reloaded");
+        // Writes are asynchronous: dropping the handle closes the command
+        // channel, but nothing joins the writer thread, so the commit can still
+        // be in flight. Poll rather than assuming it has landed — assuming it
+        // made this test pass locally and fail under load.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let restored = loop {
+            let (_storage, loaded) = Storage::open(&path_str).unwrap();
+            if let Some((_, m)) = loaded
+                .retained
+                .into_iter()
+                .find(|(topic, _)| topic == "sensors/kitchen")
+            {
+                break m;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "retained message was never persisted"
+            );
+            thread::sleep(std::time::Duration::from_millis(25));
+        };
         assert_eq!(&restored.payload[..], &payload[..]);
         assert_eq!(restored.qos, QoS::ExactlyOnce);
         assert_eq!(
