@@ -7,7 +7,9 @@
 //!
 //! The connection uses WAL mode for concurrent durability.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread;
 
 use rusqlite::Connection;
@@ -89,6 +91,9 @@ enum Command {
 #[derive(Clone)]
 pub struct Storage {
     tx: Sender<Command>,
+    /// Set once the writer thread has been observed gone, so the (serious)
+    /// "persistence has stopped" warning is logged once rather than per write.
+    writer_lost: Arc<AtomicBool>,
 }
 
 impl Storage {
@@ -107,7 +112,13 @@ impl Storage {
             .spawn(move || writer_loop(conn, rx))
             .map_err(|e| MqttError::Storage(format!("spawn storage thread: {e}")))?;
 
-        Ok((Storage { tx }, loaded))
+        Ok((
+            Storage {
+                tx,
+                writer_lost: Arc::new(AtomicBool::new(false)),
+            },
+            loaded,
+        ))
     }
 
     /// A no-op storage handle for tests / when persistence is disabled.
@@ -117,13 +128,25 @@ impl Storage {
             // Drain and discard.
             while rx.recv().is_ok() {}
         });
-        Storage { tx }
+        Storage {
+            tx,
+            writer_lost: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     fn send(&self, cmd: Command) {
-        // If the writer thread is gone we simply drop the update; the network
-        // path must never block on persistence.
-        let _ = self.tx.send(cmd);
+        // The network path must never block on persistence, so a failed send is
+        // not propagated. It is still reported: `send` only fails once the
+        // writer thread is gone, after which *nothing* is being persisted even
+        // though the broker keeps advertising durable sessions and retained
+        // messages. Silently continuing would turn that into data loss the
+        // operator discovers at the next restart. Log once, not per write.
+        if self.tx.send(cmd).is_err() && !self.writer_lost.swap(true, Ordering::Relaxed) {
+            tracing::error!(
+                "storage writer thread is gone; persistence has stopped. \
+                 Sessions and retained messages will not survive a restart"
+            );
+        }
     }
 
     pub fn upsert_retained(&self, topic: String, message: Message) {
@@ -399,4 +422,40 @@ fn decode_user_props(blob: &[u8]) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Losing the writer thread must degrade to "not persisted" rather than
+    /// panicking or blocking the caller, and must be reported exactly once.
+    #[test]
+    fn send_after_writer_thread_is_gone_does_not_panic() {
+        let (tx, rx) = mpsc::channel::<Command>();
+        drop(rx); // Simulate the writer thread having died.
+        let storage = Storage {
+            tx,
+            writer_lost: Arc::new(AtomicBool::new(false)),
+        };
+
+        // Each of these would previously vanish without a trace.
+        storage.delete_retained("a/b".into());
+        assert!(
+            storage.writer_lost.load(Ordering::Relaxed),
+            "writer loss should be recorded on the first failed send"
+        );
+
+        // Subsequent sends still must not panic (and must not re-log).
+        storage.delete_session("client".into());
+        storage.delete_retained("c/d".into());
+    }
+
+    /// The null handle drains commands, so sends succeed and nothing is flagged.
+    #[test]
+    fn null_storage_accepts_writes() {
+        let storage = Storage::null();
+        storage.delete_retained("x".into());
+        assert!(!storage.writer_lost.load(Ordering::Relaxed));
+    }
 }

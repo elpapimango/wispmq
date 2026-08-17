@@ -311,8 +311,25 @@ impl Broker {
         out
     }
 
+    /// Acquire the single lock guarding all shared broker state.
+    ///
+    /// **Poisoning policy: fail fast, deliberately.** A poisoned mutex means a
+    /// previous holder panicked mid-mutation, so `State` may be torn — a session
+    /// inserted but not indexed, a retained message half-replaced. Recovering
+    /// with `into_inner()` would let the broker keep routing on structurally
+    /// inconsistent state and silently misdeliver messages, which for a message
+    /// broker is worse than stopping. So we propagate the panic instead.
+    ///
+    /// This is only defensible because reaching a poisoned lock should be
+    /// impossible: handlers run synchronously under the lock without awaiting,
+    /// and `tests/malformed.rs` establishes that decoding hostile input returns
+    /// an error rather than panicking. If this ever fires in production it is a
+    /// genuine bug, and the panic message is the signal.
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.inner.state.lock().expect("broker state poisoned")
+        self.inner
+            .state
+            .lock()
+            .expect("broker state mutex poisoned: a previous holder panicked mid-mutation")
     }
 
     // ---------------------------------------------------------------------
@@ -1229,18 +1246,17 @@ fn deliver_to_session(
             }
             // QoS 0 is never queued for offline sessions.
         }
-        _ => {
+        QoS::AtLeastOnce | QoS::ExactlyOnce => {
             if session.is_online() && session.window_open() {
                 if let Some(id) = session.next_id() {
                     let publish = message.to_publish(qos, Some(id), retain, sub_ids);
-                    match qos {
-                        QoS::AtLeastOnce => {
-                            session.awaiting_puback.insert(id, publish.clone());
-                        }
-                        QoS::ExactlyOnce => {
-                            session.awaiting_pubrec.insert(id, publish.clone());
-                        }
-                        QoS::AtMostOnce => unreachable!(),
+                    // Matching on the two-variant set the outer arm admits keeps
+                    // this exhaustive without an `unreachable!()` that a future
+                    // refactor of the outer match could turn into a live panic.
+                    if qos == QoS::AtLeastOnce {
+                        session.awaiting_puback.insert(id, publish.clone());
+                    } else {
+                        session.awaiting_pubrec.insert(id, publish.clone());
                     }
                     if let Some(tx) = &session.out {
                         let _ = tx.send(Outgoing::Send(Box::new(publish)));

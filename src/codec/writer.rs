@@ -3,6 +3,18 @@
 use crate::codec::MAX_VARIABLE_BYTE_INTEGER;
 use crate::error::{protocol, Result};
 
+/// Clamp a slice to the 65535 bytes a Two Byte length prefix can describe.
+fn clamp_16bit<'a>(v: &'a [u8], what: &str) -> &'a [u8] {
+    if v.len() > u16::MAX as usize {
+        tracing::error!(
+            len = v.len(),
+            "{what} exceeds the 65535-byte MQTT limit and was truncated"
+        );
+        return &v[..u16::MAX as usize];
+    }
+    v
+}
+
 #[derive(Default)]
 pub struct Writer {
     buf: Vec<u8>,
@@ -71,13 +83,36 @@ impl Writer {
     }
 
     /// Encode Binary Data with a Two Byte length prefix (Section 1.5.6).
+    ///
+    /// Values longer than 65535 bytes cannot be represented. They are truncated
+    /// to fit rather than silently corrupting the length prefix (`len as u16`
+    /// wraps modulo 65536, which would desynchronise the receiver's framing for
+    /// every subsequent packet). Every such field arrives from the wire behind
+    /// its own Two Byte length, so this is unreachable today; the clamp exists
+    /// so a future internally-generated value cannot corrupt the stream.
     pub fn put_binary(&mut self, v: &[u8]) {
+        let v = clamp_16bit(v, "binary data");
         self.put_u16(v.len() as u16);
         self.buf.extend_from_slice(v);
     }
 
     /// Encode a UTF-8 Encoded String (Section 1.5.4).
+    ///
+    /// Over-long strings are truncated on a character boundary; see
+    /// [`Writer::put_binary`] for why truncation beats a wrapping length.
     pub fn put_utf8(&mut self, v: &str) {
+        let mut end = v.len().min(u16::MAX as usize);
+        if end < v.len() {
+            tracing::error!(
+                len = v.len(),
+                "string exceeds the 65535-byte MQTT limit and was truncated"
+            );
+            // Do not split a multi-byte character; back off to a boundary.
+            while end > 0 && !v.is_char_boundary(end) {
+                end -= 1;
+            }
+        }
+        let v = &v[..end];
         self.put_u16(v.len() as u16);
         self.buf.extend_from_slice(v.as_bytes());
     }
