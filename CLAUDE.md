@@ -56,8 +56,19 @@ No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
 WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
 SSE is not implemented (`GET /mcp` → 405).
 
-**Planned work is in [`TODO.md`](TODO.md)** — pick the top item. Forwarding
-(broker-to-broker bridge, `bridge.rs`) is now done; next is (2) more metrics.
+**Planned work is in [`TODO.md`](TODO.md)** — pick the top item. Item (1),
+forwarding (broker-to-broker bridge, `bridge.rs`), is done. The rest, in order:
+
+2. **More metrics** — mosquitto-parity broker status, exposed both as
+   `$SYS/broker/...` retained MQTT topics and Prometheus series.
+3. **Config file YAML → JSON** (drop `yaml-rust2`, `pulsemq.json`).
+4. **`clap` for CLI parsing** (replaces the hand-rolled `apply_args` + `HELP`).
+5. **Full code audit** — error handling/no-panic sweep, security review, then
+   refactor/optimize (`broker/mod.rs` and `config.rs` are the big modules).
+6. **Telemetry/log export** to Datadog/Splunk/OTLP — OTLP first, feature-gated.
+
+Note that items 2, 3, and 4 all touch `config.rs`, so do them one at a time
+rather than in parallel. Item 5 is worth doing before or alongside 6.
 
 ## Commands
 

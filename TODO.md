@@ -274,3 +274,136 @@ support, and less bespoke string-matching to maintain.
       wins over env which wins over file).
 - [ ] `hash-password` still works.
 - [ ] `cargo fmt`/`clippy -D warnings`/`test` green; README + CLAUDE.md updated.
+
+---
+
+## 5. Full code audit — refactor, optimize, harden error handling
+
+A sweep over the whole crate (~6.1k lines, 19 modules) now that the feature set
+is settled. Three passes, ideally three commits, so a regression is easy to
+bisect. **Behavior must not change** except where a genuine bug is fixed — every
+fix gets a test that fails before it.
+
+### Pass A — correctness & error handling (highest value)
+- **No panics on the network path.** Audit every `unwrap()`/`expect()`/slice
+  index/`as` cast reachable from untrusted input (currently ~20 unwrap/expect
+  sites and ~79 numeric casts across `src/`). A malformed packet must yield a
+  protocol error and a DISCONNECT with the right reason code — never a panic
+  that kills the connection task (or worse, poisons the shared `Mutex`).
+  - Start at `codec/`, `packet/`, `framing`, `topic`, then `broker`.
+  - Prefer `checked_add`/`try_from`/`get()` over `as` and `[i]` on
+    attacker-controlled lengths. VBI/length fields are the classic overflow spot.
+- **Mutex poisoning**: `broker::lock()` — decide and document the policy. A
+  panic while holding `State` currently poisons it for the whole process. Either
+  keep `unwrap()` (fail fast, but then Pass A must guarantee no panics under the
+  lock) or recover with `into_inner()`. Make it deliberate, not accidental.
+- **Error taxonomy** (`error.rs`): make sure each `MqttError` maps to the right
+  MQTT reason code per version, and that v3.x paths (no reason codes, no server
+  DISCONNECT) degrade correctly instead of silently doing nothing.
+- **Every `Result` is handled**: grep for ignored results (`let _ =`) and confirm
+  each is intentional (best-effort sends on a closing socket are fine; a swallowed
+  storage error is not). Add a comment where it's deliberate.
+- Confirm all three protocol versions still behave identically after refactors —
+  the version-aware integration tests are the safety net.
+
+### Pass B — security review
+- **Resource limits / DoS**: verify `max_packet_size` is enforced *before*
+  allocating, that the VBI decoder can't be made to spin, and that a client
+  can't exhaust memory via: huge/many subscriptions, topic-alias table growth,
+  unbounded offline queues for durable sessions (should be capped — ties into
+  `publish_dropped` in item 2), retained-message count/size, or many half-open
+  connections (consider a CONNECT timeout + max-connections cap).
+- **Authn/authz**: re-verify the identity pipeline (password → cert CN →
+  anonymous) can't be skipped; that ACL checks cover publish, subscribe, *and*
+  retained delivery and will messages; that a SIGHUP reload can't transiently
+  permit a revoked topic. Confirm auth failures are constant-time where it
+  matters (`auth.rs` PBKDF2 compare) and that timing doesn't leak user existence.
+- **Secrets hygiene**: no passwords/tokens in logs or error messages (bridge
+  credentials, `admin_token`, password-file contents). Check `Debug` impls.
+- **TLS**: confirm `tls_insecure` is loudly warned about at startup and is never
+  the default; check that mTLS actually *requires* a cert on both ports.
+- **Admin surface**: bearer-token comparison should be constant-time; `/metrics`
+  and `/mcp` must stay guarded; MCP tool inputs validated.
+- **Input validation**: UTF-8 rules (§1.5.4 — no U+0000, no surrogates), topic
+  name/filter validation on every path, client-id constraints.
+- Run `cargo clippy -W clippy::pedantic` once and triage (don't adopt wholesale);
+  consider `cargo audit`/`cargo deny` in CI for advisories.
+
+### Pass C — refactor & optimize
+- **`broker/mod.rs` is 1343 lines** — the largest module by far. Split along
+  seams that already exist: routing, QoS/inflight state machine, retained store,
+  will handling, session lifecycle. `config.rs` (880) similarly splits into
+  parse/apply layers (coordinate with items 3 & 4 — both touch it).
+- **Allocation on the hot path**: `topic::matches` allocates two `Vec`s per call
+  and is invoked per-subscription per-publish — switch to `split('/')` iterators
+  (zero-alloc) and benchmark. Look for needless `to_string()`/`clone()` in
+  routing and delivery; consider `Arc<[u8]>` payloads so fan-out doesn't copy.
+- **Routing cost** is currently linear over subscriptions; if benchmarks justify
+  it, consider a topic tree. Measure first — don't add a trie on a hunch.
+- Reduce duplication between the server connection task and the bridge client
+  (both do CONNECT/keepalive/packet-loop work).
+- Tighten module visibility (`pub` → `pub(crate)` where nothing external needs it).
+
+### Acceptance criteria
+- [ ] No `unwrap`/`expect`/indexing reachable from untrusted input; fuzz-ish
+      test that feeds malformed/truncated packets and asserts no panic.
+- [ ] Each security item above is checked off with a note on what was found.
+- [ ] Any bug fixed has a regression test; all 27+ tests still pass.
+- [ ] `cargo fmt`/`clippy -D warnings`/`test` green; no behavior change otherwise.
+- [ ] Notable findings summarized in the commit message / a short SECURITY note.
+
+---
+
+## 6. Ship telemetry & logs to Datadog / Splunk / OTLP
+
+Let PulseMQ push its **logs** and **metrics** to an external observability
+backend, instead of only being scraped on `/metrics`. Useful for edge/Pi
+deployments where nothing is scraping the box.
+
+`tracing` + `tracing-subscriber` are already dependencies and all logging goes
+through them, so this is mostly a matter of adding an exporter layer — not
+re-instrumenting the code.
+
+### Recommended approach — OTLP first
+Prefer **OpenTelemetry (OTLP)** as the single native export path rather than one
+integration per vendor: Datadog, Splunk (Observability Cloud), Grafana,
+Honeycomb, and the OTel Collector all ingest OTLP, and the Collector can fan out
+to anything else. One exporter, every backend.
+- Add `opentelemetry`, `opentelemetry-otlp`, `tracing-opentelemetry` (weigh the
+  dependency cost — it is not small; consider putting the whole thing behind a
+  **non-default Cargo feature** like `otel` so the lean default build and the
+  Raspberry Pi image stay small).
+- Export **metrics** (reuse the item-2 counters/gauges — same collect-once,
+  render-many source) and **logs** (a `tracing` layer). Traces/spans are optional;
+  per-connection spans would be a nice third phase.
+- Config: `otlp_endpoint`, `otlp_protocol` (grpc|http), `otlp_headers` (for API
+  keys), `otlp_interval`, `service_name` — wire through the config checklist.
+
+### Direct vendor paths (only if OTLP isn't enough)
+- **Splunk HEC**: POST JSON events to `/services/collector/event` with an
+  `Authorization: Splunk <token>` header. Simple enough to implement by hand
+  over the existing HTTP-ish code; a good fallback for log-only setups.
+- **Datadog**: the Agent accepts DogStatsD (UDP) for metrics and the HTTP logs
+  intake for logs. Direct HTTP intake needs an API key. Only worth it if the
+  user specifically wants agent-less Datadog.
+- Whatever is added, it must be **optional and off by default**, and must never
+  block or slow the MQTT path — batch on a background task with a bounded queue
+  and drop (with a counter) rather than applying backpressure.
+
+### Cross-cutting requirements
+- **Structured logs**: audit existing log sites for consistent fields
+  (`client_id`, `identity`, `topic`, `reason_code`) so the exported JSON is
+  actually queryable. Redact secrets (ties into item 5's secrets hygiene).
+- **Failure isolation**: an unreachable collector must only log a throttled
+  warning; never crash, never stall the broker, never grow memory without bound.
+- Document the whole thing in a README "Observability" section alongside the
+  existing Prometheus/`$SYS` docs.
+
+### Acceptance criteria
+- [ ] With export enabled, logs and metrics arrive at an OTLP collector
+      (verify against a local `otel/opentelemetry-collector` container).
+- [ ] Disabled by default; the default build/image size is unaffected (feature-gated).
+- [ ] A dead/slow collector degrades gracefully — bounded queue, drop counter,
+      throttled warning, no impact on publish latency.
+- [ ] No secrets in exported logs.
+- [ ] Config options wired everywhere (config checklist) + README section.
