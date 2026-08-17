@@ -18,13 +18,12 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 5A | No-panic / error-handling audit | ✅ done |
 | 5B | Security review | ✅ done |
 | 4 | `clap` for CLI parsing | ✅ done |
-| **5C** | **Refactor & optimize** | **next** |
-| 6 | Telemetry/log export (OTLP) | open |
+| 5C | Refactor & optimize | ✅ done (1 bullet declined) |
+| **6** | **Telemetry/log export (OTLP)** | **next** |
 
-**Start with item 5C**, now re-scoped: `config.rs` shrank with items 3 and 4, so
-what is left is `broker/mod.rs` and the routing hot path. Item 6 should reuse the
-existing `metrics::Snapshot` rather than building a parallel counter set, so it
-benefits from item 2 already being done.
+**Only item 6 is left.** It should reuse the existing `metrics::Snapshot` rather
+than building a parallel counter set, so it benefits from item 2 already being
+done, and it must be feature-gated and off by default.
 
 ---
 
@@ -360,7 +359,7 @@ support, and less bespoke string-matching to maintain.
 
 ---
 
-## 5. Full code audit — Pass A ✅, Pass B ✅, Pass C open (next)
+## 5. Full code audit — Pass A ✅, Pass B ✅, Pass C ✅ — DONE
 
 A sweep over the whole crate, in three passes so a regression is easy to bisect.
 **Behavior must not change** except where a genuine bug is fixed — every fix gets
@@ -387,10 +386,10 @@ and `tls_insecure` warns loudly at startup). Verified sound and left alone:
 pre-allocation size enforcement, CONNECT/keep-alive timeouts, and the
 already-constant-time admin token compare.
 
-**Pass C is the remaining work** — see below. Item 4 moved the command line out
-to `cli.rs`, taking `config.rs` from 1011 to 725 lines, so C is re-scoped to
-`broker/mod.rs` (now 1552 lines) and the routing hot path; the `config.rs` split
-listed below is no longer worth doing.
+**Pass C is done** — see below. Item 4 had moved the command line out to
+`cli.rs`, taking `config.rs` from 1011 to 725 lines, so C was re-scoped to
+`broker/mod.rs` and the routing hot path; the `config.rs` split in the original
+notes was dropped as no longer worth doing.
 
 ### Pass A — correctness & error handling (highest value)
 - **No panics on the network path.** Audit every `unwrap()`/`expect()`/slice
@@ -437,7 +436,59 @@ listed below is no longer worth doing.
 - Run `cargo clippy -W clippy::pedantic` once and triage (don't adopt wholesale);
   consider `cargo audit`/`cargo deny` in CI for advisories.
 
-### Pass C — refactor & optimize
+### Pass C — refactor & optimize — ✅ DONE
+
+Delivered in five commits so the diff stays bisectable:
+
+1. **`topic::matches` is allocation-free** — it collected two `Vec<&str>` per
+   call on the routing hot path; now walks `split('/')` iterators. 102 -> 61
+   ns/call. Guarded by an equivalence test that keeps the old implementation as a
+   reference and compares ~1.2M filter/topic pairs.
+2. **Measured before optimizing** (`tests/bench_routing.rs`), which redirected
+   the rest of the item — see "the trie question" below.
+3. **`Arc<[u8]>` payloads** — `Message`/`Publish` held `Vec<u8>`, so fan-out
+   copied the payload per recipient plus again into the QoS>0 retransmit buffer.
+   Fan-out to 100 subscribers of a 64 KiB message: 5.1 ms -> 32 us per publish
+   (162x). Cost is now independent of payload size.
+4. **`broker/mod.rs` split** 1552 lines -> 9 files, largest 263, along the
+   section banners the file already had. Verified as a pure move: all 36
+   functions present, bodies byte-identical.
+5. **One-pass delivery + visibility tightening**, the latter of which exposed
+   two pieces of long-dead code (`Session::clear`, `Subscription::retain_handling`).
+
+**The trie question is answered: don't.** Matching costs ~19 ns per subscription
+and is perfectly linear; each *delivery* costs ~430 ns. Delivery is 20-25x the
+cost of matching, so a trie would optimize the cheap half. Revisit only if a
+deployment genuinely runs 10k+ subscriptions on one broker, and re-measure first.
+
+**Declined: deduplicating the server connection task and the bridge client.**
+They share the *shape* of a `tokio::select!` over "outgoing channel" and "inbound
+socket read" — about six lines of structure — and nothing else. The server
+accepts a CONNECT and drives the broker's QoS state machine, enforces keep-alive
+as a read timeout, and reports outcomes as `Action` plus Will suppression. The
+bridge initiates a CONNECT, owns *client-side* QoS state (its own packet ids and
+inbound QoS 2 set), pings on an interval, rewrites each publish's QoS per topic,
+and returns `Result<bool>` to drive reconnect. A shared helper would need to be
+parameterized on the outgoing transform, the inbound handler, the timeout
+behavior, the shutdown behavior and the return type — five injection points for
+six shared lines, which costs more than it saves and would couple the server hot
+path to the bridge. The parts that *are* genuinely shareable are already shared:
+`framing::read_packet`/`write_packet`, the packet/codec layer, `tls::client_config`
+and `ws::client`.
+
+Two observations recorded rather than acted on:
+- `SubRecord::to_topic_filter` has no callers, but it is public API on a public
+  struct, so removing it is a breaking change rather than a drive-by cleanup.
+- The bridge writes to its remote via `write_packet` directly, so those packets
+  are not counted by `record_sent` and do not appear in the per-control-packet
+  `$SYS`/Prometheus counters (local deliveries through routing are counted).
+  Defensible either way — mosquitto counts bridge traffic in its totals — but
+  changing counter semantics moves other people's dashboards, so it needs a
+  decision, not a refactor.
+
+Original notes follow.
+
+### Pass C — original notes
 - **`broker/mod.rs` is 1343 lines** — the largest module by far. Split along
   seams that already exist: routing, QoS/inflight state machine, retained store,
   will handling, session lifecycle. `config.rs` (880) similarly splits into

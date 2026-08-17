@@ -84,17 +84,22 @@ Done since 1.0.0:
 - (4) **`clap` parses the CLI** — the hand-rolled `apply_args`/`HELP` are gone;
   flags live in a `#[derive(Parser)]` struct in `cli.rs`. Env stays in
   `apply_env` so the precedence layers do not collapse.
+- (5C) **Refactor/optimize** — `topic::matches` is allocation-free (102 -> 61
+  ns/call); payloads are `Arc<[u8]>` so fan-out no longer copies them (64 KiB to
+  100 subscribers: 5.1 ms -> 32 us); `broker/mod.rs` split 1552 lines -> 9 files
+  along its existing section banners; routing delivers ordinary subscriptions in
+  one pass. **A topic trie was measured and rejected** — matching is ~19 ns per
+  subscription, delivery ~430 ns, so a trie optimizes the cheap half.
+  Deduplicating the server task and bridge client was declined with reasons in
+  `TODO.md`. Benchmarks live in `tests/bench_routing.rs` and `topic::bench_matches`
+  (both `#[ignore]`d).
 - (2) **Metrics** — mosquitto-parity broker status on both surfaces:
   `$SYS/broker/...` retained topics (`sysinfo.rs`, `sys_interval`) and
   Prometheus series, incl. per-control-packet counters. `load/*` moving
   averages were deliberately skipped — use `rate()`.
 
-Remaining, in order:
+Remaining:
 
-5C. **Refactor/optimize** — split `broker/mod.rs` (1.3k lines); `topic::matches`
-   allocates two `Vec`s per call on the routing hot path. Measure before adding
-   a topic trie. `config.rs` shrank with the JSON and clap moves, so it is no
-   longer a target.
 6. **Telemetry/log export** to Datadog/Splunk/OTLP — OTLP first, feature-gated.
    Reuse the existing `Snapshot` rather than building a parallel counter set.
 
@@ -126,7 +131,12 @@ before changing it.
 - `framing` — async read/write of whole packets over any `AsyncRead`/`AsyncWrite`
 - `topic` — topic-name/filter validation + wildcard matching (§4.7/§4.8)
 - `message` — the routable application message (queue/retain/persist form)
-- `broker` — session registry, routing, QoS state machines, retained store, wills, ACL enforcement
+- `broker` — session registry, routing, QoS state machines, retained store,
+  wills, ACL enforcement. One `impl Broker` split across `broker/*.rs` by spec
+  area (`routing`, `publish`, `subscribe`, `connect`, `lifecycle`, `authz`,
+  `stats`, `bridges`, `session`); `mod.rs` holds the types, the lock and packet
+  dispatch, and documents the layout. Slices share imports via `use super::*`
+  and mark cross-slice items `pub(super)`.
 - `storage` — SQLite persistence actor + startup loader
 - `server` — TCP/TLS listeners and the generic per-connection task
 - `ws` — WebSocket transport: `mqtt`-subprotocol handshake + byte-stream adapter (§6)
@@ -208,8 +218,8 @@ README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
 
 ## Tests
 
-54 tests. Unit tests live in-module (`topic`, `acl`, `cli`, `config`, `auth`,
-`storage`); integration suites are in `tests/`:
+59 tests, plus two `#[ignore]`d benchmarks. Unit tests live in-module (`topic`,
+`acl`, `cli`, `config`, `auth`, `storage`); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
@@ -223,6 +233,14 @@ README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
   change here fails, a remote peer can crash the broker.
 - `tests/limits.rs` — the offline-queue bound (`max_queued_messages`), including
   that `0` still means unlimited.
+- `tests/shared.rs` — shared subscriptions (`$share/...`): one member per group
+  per message, distinct groups and ordinary subscribers each getting their own
+  copy, and No Local excluding the publisher from its own group.
+- `tests/bench_routing.rs` — **benchmarks, `#[ignore]`d.** Run with
+  `cargo test --release --test bench_routing -- --ignored --nocapture
+  --test-threads=1` (they contaminate each other in parallel). Together with
+  `topic::bench_matches` these are the measurements behind the 5C decisions —
+  re-run them before claiming a routing optimization.
 - `tests/sysinfo.rs` — `$SYS` publishing/retention, `sys_interval: 0`, that `#`
   does not match `$SYS`, that clients cannot publish there, and that the
   Prometheus and `$SYS` renderings of the same `Snapshot` agree.
@@ -289,7 +307,7 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (54 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (59 tests), then
   `cargo run -- --help`.
 
 ## Conventions
