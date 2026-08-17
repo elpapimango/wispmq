@@ -18,19 +18,20 @@ project.
 
 ## Project history & status
 
-Current status: the crate version is **1.1.0**, carrying the post-1.0.0 work on
+Current status: the crate version is **1.1.1**, carrying the post-1.0.0 work on
 `main` — forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, the clap CLI
 and the 5C refactor (see "Done since 1.0.0" below). A **minor** bump rather than
 a patch, because three of those are breaking for existing consumers: the JSON
 config move, the `Startup`/`HELP` library-API changes, and the `mqtt_packet_*`
 metric rename.
 
-The last *tagged* release is still **v1.0.0** (tag `v1.0.0`, GitHub Release,
-`ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is ahead of both the tag and that
-image. **1.1.0 is not tagged or released yet** — cutting it means pushing a
-`v1.1.0` tag (which triggers `docker.yml`) and creating the GitHub Release. CI
-(`ci.yml`) and image builds (`docker.yml`) are green on `main`. `git log` has the
-detail — this is the map.
+**v1.1.1 is tagged** (`v1.1.1`), which triggered `docker.yml` to publish
+`ghcr.io/elpapimango/pulsemq:1.1.1`. A **GitHub Release** has not been created
+for it — `v1.0.0` still has the only Release object. Note 1.1.0 was never tagged,
+so 1.1.1 is the first tagged build carrying every post-1.0.0 change; release
+notes should describe the delta from **1.0.0**, not from 1.1.0. CI (`ci.yml`) and
+image builds (`docker.yml`) are green on `main`. `git log` has the detail — this
+is the map.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
@@ -59,15 +60,7 @@ Milestones, in order:
 13. Docker workflow set to **`provenance: false`** and the GHCR package pruned
     of orphaned untagged versions.
 
-**One open question, not a bug:** the bridge writes to its remote with
-`write_packet` directly, so those packets miss `record_sent` and do not appear in
-the per-control-packet `$SYS`/Prometheus counters — while messages the bridge
-delivers *locally* through routing are counted. Defensible either way (mosquitto
-counts bridge traffic in its totals), but changing counter semantics moves
-existing dashboards, so it needs a decision rather than a drive-by fix. Recorded
-in `TODO.md`.
-
-Otherwise no known open bugs. Optional follow-ups if wanted: the `1.0.0` image
+No known open bugs. Optional follow-ups if wanted: the `1.0.0` image
 predates `provenance: false` so its index still has two attestation child
 manifests (re-tag/rebuild to make it single-manifest); mutual-TLS on the *admin*
 port and WS+mTLS work but aren't covered by automated tests; WebSocket
@@ -114,6 +107,15 @@ Done since 1.0.0:
   Deduplicating the server task and bridge client was declined with reasons in
   `TODO.md`. Benchmarks live in `tests/bench_routing.rs` and `topic::bench_matches`
   (both `#[ignore]`d).
+- **Bridge traffic is counted** (post-5C). The bridge wrote to its remote with
+  `write_packet` directly and read with `read_packet` directly, so *both*
+  directions of its remote link were invisible to `packets_sent`/`packets_received`,
+  `bytes_*` and every `mqtt_packet_*` series — an edge broker whose only job is
+  forwarding reported almost no traffic. All bridge I/O now goes through
+  `bridge::send`/`bridge::record_received`, mirroring `server::send`.
+- **Per-packet metric rename** (post-5C): `mqtt_packet_<packet>_*_total`, because
+  the old `mqtt_<packet>_*_total` collided with the aggregate publish counters and
+  made `/metrics` emit a duplicate name.
 - (2) **Metrics** — mosquitto-parity broker status on both surfaces:
   `$SYS/broker/...` retained topics (`sysinfo.rs`, `sys_interval`) and
   Prometheus series, incl. per-control-packet counters. `load/*` moving
@@ -203,6 +205,14 @@ asserts the two agree. Counters live in `metrics::Metrics` (atomics, incremented
 on the hot path via `record_received`/`record_sent`); gauges are computed under
 the lock in `Broker::snapshot()`.
 
+The traffic counters (`packets_*`, `bytes_*`, `publish_bytes_*`, `mqtt_packet_*`)
+cover **both** client connections and the bridge's link to its remote — the
+bridge routes its I/O through `bridge::send`/`bridge::record_received` for exactly
+that reason. `tests/bridge.rs::bridge_traffic_is_counted_in_the_packet_metrics`
+pins it, using CONNECT-sent and CONNACK-received as the giveaways: a broker never
+sends a CONNECT or receives a CONNACK on a client connection, so a non-zero count
+can only come from a bridge.
+
 The per-control-packet Prometheus series are `mqtt_packet_<packet>_...`, **not**
 `mqtt_<packet>_...`: the latter collided with the aggregate
 `mqtt_publish_{received,sent}_total` and made `/metrics` repeat a metric name,
@@ -246,15 +256,16 @@ README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
 
 ## Tests
 
-60 tests, plus two `#[ignore]`d benchmarks. Unit tests live in-module (`topic`,
+61 tests, plus two `#[ignore]`d benchmarks. Unit tests live in-module (`topic`,
 `acl`, `cli`, `config`, `auth`, `storage`); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
   the wss cert is generated in-test with `rcgen` (dev-dep) so tests are
   self-contained/CI-safe.
-- `tests/bridge.rs` — two in-process brokers bridged; delivery both ways plus
-  reconnect when the remote starts late.
+- `tests/bridge.rs` — two in-process brokers bridged; delivery both ways,
+  reconnect when the remote starts late, and that the bridge's remote traffic
+  lands in the shared packet counters.
 - `tests/malformed.rs` — **the no-panic guard.** Truncations, byte mutations,
   every type/flag nibble, lying Remaining Lengths, pathological VBIs, all
   decoded under v3.1/v3.1.1/v5. Keep it passing when touching the codec; if a
@@ -335,7 +346,7 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (60 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (61 tests), then
   `cargo run -- --help`.
 
 ## Conventions

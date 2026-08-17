@@ -14,9 +14,10 @@ use pulsemq::broker::Broker;
 use pulsemq::codec::Properties;
 use pulsemq::config::Config;
 use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
+use pulsemq::message::Message;
 use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
 use pulsemq::storage::Storage;
-use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
+use pulsemq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
 
 fn free_addr() -> SocketAddr {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -222,4 +223,89 @@ async fn bridge_reconnects_when_remote_starts_late() {
     let (topic, payload) = expect_publish(&mut sub_b).await;
     assert_eq!(topic, "a2b/after-reconnect");
     assert_eq!(payload, b"ok");
+}
+
+/// Traffic the bridge exchanges with its remote must land in the shared packet
+/// counters.
+///
+/// CONNECT-sent and CONNACK-received are the giveaways: a broker never sends a
+/// CONNECT or receives a CONNACK on a *client* connection, so a non-zero count
+/// for either can only have come from a bridge's own link. Broker A here has no
+/// clients at all — the bridge owns the only socket it holds — so every byte
+/// counted below is bridge traffic and nothing else.
+#[tokio::test]
+async fn bridge_traffic_is_counted_in_the_packet_metrics() {
+    let addr_a = free_addr();
+    let addr_b = free_addr();
+    let broker_a = make_broker(addr_a);
+    let _broker_b = make_broker(addr_b);
+    sleep(Duration::from_millis(100)).await;
+
+    // Nothing has happened yet, so the giveaway counters start at zero.
+    let before = broker_a.snapshot();
+    assert_eq!(before.packet_sent[PacketType::Connect as usize], 0);
+    assert_eq!(before.packet_received[PacketType::Connack as usize], 0);
+
+    tokio::spawn(pulsemq::bridge::run(
+        broker_a.clone(),
+        bridge_config("metrics", addr_b),
+    ));
+    wait_for_bridge(&broker_a).await;
+    sleep(Duration::from_millis(200)).await;
+
+    // Originate a message on A with no client socket involved, so the forwarded
+    // PUBLISH is the only PUBLISH A writes. `$bridge/metrics` is the bridge's own
+    // session id; publishing under a different origin keeps its `no_local`
+    // subscription from suppressing the forward.
+    broker_a.inject_publish(
+        "test-origin",
+        Message {
+            topic: "a2b/counted".into(),
+            payload: b"bridge-payload"[..].into(),
+            qos: QoS::AtMostOnce,
+            retain: false,
+            payload_format_indicator: None,
+            content_type: None,
+            response_topic: None,
+            correlation_data: None,
+            user_properties: Vec::new(),
+            expires_at: None,
+        },
+    );
+    sleep(Duration::from_millis(300)).await;
+
+    let after = broker_a.snapshot();
+    assert!(
+        after.packet_sent[PacketType::Connect as usize] >= 1,
+        "the bridge's CONNECT to the remote was not counted"
+    );
+    assert!(
+        after.packet_received[PacketType::Connack as usize] >= 1,
+        "the remote's CONNACK was not counted"
+    );
+    assert!(
+        after.packet_sent[PacketType::Subscribe as usize] >= 1,
+        "the bridge's SUBSCRIBE to the remote was not counted"
+    );
+    assert!(
+        after.packet_sent[PacketType::Publish as usize] >= 1,
+        "the forwarded PUBLISH was not counted"
+    );
+    assert!(
+        after.packets_sent >= 3 && after.bytes_sent > 0,
+        "aggregate sent counters did not move: {} packets, {} bytes",
+        after.packets_sent,
+        after.bytes_sent
+    );
+    assert!(
+        after.packets_received >= 1 && after.bytes_received > 0,
+        "aggregate received counters did not move"
+    );
+    assert_eq!(
+        after.publish_bytes_sent,
+        b"bridge-payload".len() as u64,
+        "forwarded payload bytes should be counted exactly once"
+    );
+    // And the bridge-specific counter still works alongside the shared ones.
+    assert!(after.bridge_forwarded_out >= 1);
 }

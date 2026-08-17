@@ -399,20 +399,32 @@ where
     let version = cfg.protocol_version;
     let max = broker.config().max_packet_size;
 
-    write_packet(&mut wr, &Packet::Connect(build_connect(cfg)), version).await?;
+    let metrics = broker.metrics();
+    send(
+        &mut wr,
+        &Packet::Connect(build_connect(cfg)),
+        version,
+        metrics,
+    )
+    .await?;
     match read_packet(&mut rd, max, version).await? {
-        ReadOutcome::Packet(Packet::Connack(c), _) => {
-            if c.reason_code.is_error() {
-                tracing::warn!("bridge {:?}: remote CONNACK {:?}", cfg.name, c.reason_code);
-                return Ok(false);
+        ReadOutcome::Packet(pkt, n) => {
+            record_received(metrics, &pkt, n);
+            match pkt {
+                Packet::Connack(c) => {
+                    if c.reason_code.is_error() {
+                        tracing::warn!("bridge {:?}: remote CONNACK {:?}", cfg.name, c.reason_code);
+                        return Ok(false);
+                    }
+                }
+                other => {
+                    return Err(MqttError::Protocol(format!(
+                        "bridge {:?}: expected CONNACK, got {}",
+                        cfg.name,
+                        other.name()
+                    )));
+                }
             }
-        }
-        ReadOutcome::Packet(other, _) => {
-            return Err(MqttError::Protocol(format!(
-                "bridge {:?}: expected CONNACK, got {}",
-                cfg.name,
-                other.name()
-            )));
         }
         ReadOutcome::Eof => return Ok(false),
     }
@@ -437,7 +449,7 @@ where
             properties: Properties::new(),
             filters: in_filters,
         };
-        write_packet(&mut wr, &Packet::Subscribe(sub), version).await?;
+        send(&mut wr, &Packet::Subscribe(sub), version, metrics).await?;
     }
 
     Metrics::inc(&broker.metrics().bridges_connected);
@@ -500,7 +512,7 @@ where
                             properties: publish.properties.clone(),
                             payload: publish.payload.clone(),
                         };
-                        write_packet(wr, &Packet::Publish(fwd), version).await?;
+                        send(wr, &Packet::Publish(fwd), version, broker.metrics()).await?;
                         Metrics::inc(&broker.metrics().bridge_forwarded_out);
                     }
                     // Acks/control targeted at the local session are irrelevant
@@ -514,23 +526,26 @@ where
                 last_rx = Instant::now();
                 match res? {
                     ReadOutcome::Eof => return Ok(true),
-                    ReadOutcome::Packet(pkt, _) => match pkt {
+                    ReadOutcome::Packet(pkt, n) => {
+                    record_received(broker.metrics(), &pkt, n);
+                    match pkt {
                         Packet::Publish(p) => {
                             handle_inbound(broker, bridge_client, p, wr, version, &mut inbound_qos2).await?;
                         }
                         // Our outbound QoS 2 forward: remote acknowledged receipt.
                         Packet::Pubrec(a) => {
-                            write_packet(wr, &Packet::Pubrel(PubAck::new(a.packet_id, crate::types::ReasonCode::Success)), version).await?;
+                            send(wr, &Packet::Pubrel(PubAck::new(a.packet_id, crate::types::ReasonCode::Success)), version, broker.metrics()).await?;
                         }
                         // Inbound QoS 2 completion from the remote.
                         Packet::Pubrel(a) => {
                             inbound_qos2.remove(&a.packet_id);
-                            write_packet(wr, &Packet::Pubcomp(PubAck::new(a.packet_id, crate::types::ReasonCode::Success)), version).await?;
+                            send(wr, &Packet::Pubcomp(PubAck::new(a.packet_id, crate::types::ReasonCode::Success)), version, broker.metrics()).await?;
                         }
                         Packet::Disconnect(_) => return Ok(true),
                         // PUBACK / PUBCOMP / SUBACK / PINGRESP: nothing to do.
                         _ => {}
-                    },
+                    }
+                    }
                 }
             }
 
@@ -539,10 +554,40 @@ where
                     if last_rx.elapsed() > Duration::from_secs(ka * 2) {
                         return Err(MqttError::Protocol("bridge remote keep-alive timeout".into()));
                     }
-                    write_packet(wr, &Packet::Pingreq, version).await?;
+                    send(wr, &Packet::Pingreq, version, broker.metrics()).await?;
                 }
             }
         }
+    }
+}
+
+/// Write a packet to the remote and record it in the shared counters.
+///
+/// Mirrors `server::send`. The bridge used to call `write_packet` directly, so
+/// everything it exchanged with its remote was invisible to `packets_sent`,
+/// `bytes_sent` and the `mqtt_packet_*_sent_total` series — an edge broker whose
+/// only job is forwarding reported almost no traffic. Route every write through
+/// here so the remote link is counted like any other connection.
+async fn send<W: AsyncWrite + Unpin>(
+    wr: &mut W,
+    packet: &Packet,
+    version: ProtocolVersion,
+    metrics: &Metrics,
+) -> Result<()> {
+    let n = write_packet(wr, packet, version).await?;
+    metrics.record_sent(packet.packet_type(), n);
+    if let Packet::Publish(p) = packet {
+        Metrics::add(&metrics.publish_bytes_sent, p.payload.len() as u64);
+    }
+    Ok(())
+}
+
+/// Record a packet received from the remote, mirroring the server's read arm.
+/// The counterpart to [`send`]: inbound bridge traffic was equally uncounted.
+fn record_received(metrics: &Metrics, packet: &Packet, frame_bytes: usize) {
+    metrics.record_received(packet.packet_type(), frame_bytes);
+    if let Packet::Publish(p) = packet {
+        Metrics::add(&metrics.publish_bytes_received, p.payload.len() as u64);
     }
 }
 
@@ -571,18 +616,20 @@ where
     match p.qos {
         QoS::AtMostOnce => {}
         QoS::AtLeastOnce => {
-            write_packet(
+            send(
                 wr,
                 &Packet::Puback(PubAck::new(id, crate::types::ReasonCode::Success)),
                 version,
+                broker.metrics(),
             )
             .await?;
         }
         QoS::ExactlyOnce => {
-            write_packet(
+            send(
                 wr,
                 &Packet::Pubrec(PubAck::new(id, crate::types::ReasonCode::Success)),
                 version,
+                broker.metrics(),
             )
             .await?;
         }

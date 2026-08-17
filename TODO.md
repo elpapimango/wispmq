@@ -19,17 +19,15 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 5A | No-panic / error-handling audit | ✅ done |
 | 5B | Security review | ✅ done |
 | 5C | Refactor & optimize | ✅ done (1 bullet declined) |
+| — | [Bridge send metrics](#resolved-bridge-traffic-is-counted) | ✅ resolved — counted |
 | **6** | **Telemetry/log export (OTLP)** | **next** |
-| — | [Open decision: bridge send metrics](#open-decision-should-bridge-to-remote-traffic-count-in-the-packet-counters) | needs a call |
-| — | [Cut the 1.1.0 release](#pending-cut-the-110-release) | ready when wanted |
 
-**Only item 6 is left** as build work. It should reuse the existing
+**Item 6 is the only work left.** It should reuse the existing
 `metrics::Snapshot` rather than building a parallel counter set, so it benefits
 from item 2 already being done, and it must be feature-gated and off by default.
 
-The two `—` rows are not implementation work: one is a semantics decision that
-needs a human call, the other is a release step. Both are described at the bottom
-of this file.
+`v1.1.1` is tagged and its image is published; a GitHub Release object has not
+been created for it (see the release note at the bottom of this file).
 
 ---
 
@@ -485,9 +483,8 @@ and `ws::client`.
 Two things noticed here but left alone:
 - `SubRecord::to_topic_filter` has no callers, but it is public API on a public
   struct, so removing it is a breaking change rather than a drive-by cleanup.
-- Bridge-to-remote writes are not counted by `record_sent`. Promoted to its own
-  item at the bottom of this file: "Open decision: should bridge-to-remote
-  traffic count in the packet counters?".
+- Bridge-to-remote writes were not counted by `record_sent`. Fixed in 1.1.1 —
+  see "Resolved: bridge traffic is counted" below.
 
 Original notes follow.
 
@@ -572,56 +569,61 @@ to anything else. One exporter, every backend.
 
 ---
 
-## Open decision: should bridge-to-remote traffic count in the packet counters?
+## Resolved: bridge traffic is counted
 
-Found while smoke-testing 1.1.0. `src/bridge.rs` writes to its remote with
-`framing::write_packet` directly, whereas the server's connection task goes
-through a `send` helper that also calls `metrics.record_sent(...)`. So:
+**Decision: count it.** Found while smoke-testing 1.1.0 and fixed in 1.1.1.
 
-- messages the bridge delivers **locally** (through `route`) *are* counted;
-- packets the bridge sends **to the remote broker** are *not* — they are missing
-  from `packets_sent`, `bytes_sent` and every `mqtt_packet_*_sent_total` series.
+`src/bridge.rs` wrote to its remote with `framing::write_packet` and read with
+`framing::read_packet` directly, while the server's connection task went through
+a `send` helper that also calls `metrics.record_sent(...)` and a read arm that
+calls `record_received(...)`. So **both** directions of the bridge's remote link
+were invisible to `packets_sent`/`packets_received`, `bytes_sent`/`bytes_received`
+and every `mqtt_packet_*` series. Messages the bridge delivered *locally* through
+`route` were counted, which made the gap easy to miss.
 
-Both readings are defensible. Those packets go out over a *client* connection to
-another broker rather than to a subscribing client, so excluding them keeps the
-counters meaning "traffic with our clients". But mosquitto counts bridge traffic
-in its totals, and an operator watching `bytes_sent` on an edge broker whose only
-job is forwarding will see almost nothing, which is surprising.
+The rejected alternative was to document the exclusion — arguing those packets go
+to another broker rather than to a subscribing client. Counting won because an
+operator watching `bytes_sent` on an edge broker whose only job is forwarding
+would otherwise see almost nothing, and because mosquitto counts bridge traffic in
+its totals.
 
-**Why it is not just fixed:** either choice changes what an existing dashboard
-means, and the counters are a documented, mosquitto-parity surface. Pick one:
+What changed:
+- `bridge::send` and `bridge::record_received` now wrap every write and read,
+  mirroring `server::send`. Only one raw `write_packet` call remains in the file,
+  inside `send` itself.
+- The affected HELP strings say "clients and bridge remotes" rather than
+  "clients", since they no longer mean only client traffic.
+- `tests/bridge.rs::bridge_traffic_is_counted_in_the_packet_metrics` pins it. It
+  uses CONNECT-sent and CONNACK-received as the giveaways — a broker never sends a
+  CONNECT or receives a CONNACK on a client connection, so a non-zero count can
+  only have come from a bridge — and drives a broker with **no clients at all**,
+  so every counted byte is bridge traffic. Verified to fail with the old
+  behaviour ("the bridge's CONNECT to the remote was not counted") and confirmed
+  live on two bridged release binaries.
 
-- **Count it** — route the bridge's writes through a helper that calls
-  `record_sent`, and note the change in the README metrics section as a behaviour
-  change (it inflates existing series for anyone running bridges).
-- **Document the exclusion** — add it to the "expected behaviour that reads like
-  a bug" list in `CLAUDE.md`, and say so in the README metrics section. Consider
-  the existing per-bridge counters (`bridge_forwarded_{in,out}`) sufficient for
-  bridge visibility.
-
-Either way, add a test asserting the chosen behaviour, because nothing currently
-pins it.
+**This inflates existing series for anyone running bridges**, which is why it went
+out in 1.1.1 with a note rather than silently.
 
 ---
 
-## Pending: cut the 1.1.0 release
+## Release: v1.1.1 is tagged; no GitHub Release object yet
 
-`main` is at crate version **1.1.0** and green, but the last tag is still
-`v1.0.0`. Nothing is blocking a release; it simply has not been cut.
+`main` is at crate version **1.1.1**, tagged `v1.1.1`, and the tag push triggered
+`docker.yml` to publish `ghcr.io/elpapimango/pulsemq:1.1.1`. What is *not* done is
+the GitHub Release object:
 
 ```bash
-git tag -a v1.1.0 -m "PulseMQ 1.1.0"
-git push origin v1.1.0          # this triggers docker.yml for a v* image
-gh release create v1.1.0 --generate-notes
+gh release create v1.1.1 --generate-notes
 ```
 
-It is a **minor** bump because three changes break existing consumers:
+**1.1.0 was never tagged**, so v1.1.1 is the first tagged build carrying every
+post-1.0.0 change. Release notes should therefore describe the delta from
+**1.0.0**, and call out the four things that break an existing 1.0.0 deployment:
 
 - the config file is JSON, not YAML (item 3) — a `pulsemq.yaml` no longer loads;
 - `config::Startup` lost `Exit` and gained `HashPassword`, and `config::HELP` is
   gone (item 4) — library-only, but a source break;
-- the per-control-packet metrics are `mqtt_packet_<packet>_*` (see item 2's note)
-  — dashboards scraping the old names need updating.
-
-Worth mentioning in the release notes, since they are what a user upgrading from
-`1.0.0` will hit.
+- the per-control-packet metrics are `mqtt_packet_<packet>_*` (item 2's note) —
+  dashboards scraping the old names need updating;
+- traffic counters now include bridge-to-remote packets (see above) — existing
+  series read higher on any broker running a bridge.

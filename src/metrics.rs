@@ -41,15 +41,15 @@ pub const PACKET_NAMES: [&str; PACKET_KINDS] = [
 pub struct Metrics {
     /// Accepted connections since start (successful CONNECT).
     pub connections_total: AtomicU64,
-    /// Control packets received from clients.
+    /// Control packets received from clients and from bridge remotes.
     pub packets_received: AtomicU64,
-    /// Control packets sent to clients.
+    /// Control packets sent to clients and to bridge remotes.
     pub packets_sent: AtomicU64,
     /// Bytes read off client sockets (whole frames).
     pub bytes_received: AtomicU64,
     /// Bytes written to client sockets (whole frames).
     pub bytes_sent: AtomicU64,
-    /// PUBLISH packets received from clients.
+    /// PUBLISH packets received from clients and from bridge remotes.
     pub publish_received: AtomicU64,
     /// PUBLISH deliveries fanned out to subscribers.
     pub publish_delivered: AtomicU64,
@@ -220,17 +220,17 @@ impl Snapshot {
         );
         counter(
             "mqtt_bytes_received_total",
-            "Total bytes received from clients.",
+            "Total bytes received from clients and bridge remotes.",
             self.bytes_received,
         );
         counter(
             "mqtt_bytes_sent_total",
-            "Total bytes sent to clients.",
+            "Total bytes sent to clients and bridge remotes.",
             self.bytes_sent,
         );
         counter(
             "mqtt_publish_received_total",
-            "Total PUBLISH packets received from clients.",
+            "Total PUBLISH packets received from clients and bridge remotes.",
             self.publish_received,
         );
         counter(
@@ -268,7 +268,7 @@ impl Snapshot {
         );
         counter(
             "mqtt_publish_sent_total",
-            "Total PUBLISH packets sent to clients.",
+            "Total PUBLISH packets sent to clients and bridge remotes.",
             self.packet_sent[PacketType::Publish as usize],
         );
         counter(
