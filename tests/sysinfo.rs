@@ -195,7 +195,7 @@ async fn clients_cannot_publish_to_sys() {
         topic: "$SYS/broker/clients/connected".into(),
         packet_id: None,
         properties: Properties::new(),
-        payload: b"99999".to_vec(),
+        payload: b"99999"[..].into(),
     });
     write_packet(&mut c, &p, V5).await.unwrap();
 
@@ -250,7 +250,7 @@ async fn sys_topics_do_not_inflate_the_retained_gauge() {
         topic: "user/keep".into(),
         packet_id: None,
         properties: Properties::new(),
-        payload: b"hello".to_vec(),
+        payload: b"hello"[..].into(),
     });
     write_packet(&mut c, &p, V5).await.unwrap();
     sleep(Duration::from_millis(250)).await;
@@ -281,7 +281,7 @@ async fn sys_and_prometheus_report_the_same_values() {
             topic: "load/x".into(),
             packet_id: None,
             properties: Properties::new(),
-            payload: format!("payload-{i}").into_bytes(),
+            payload: format!("payload-{i}").into_bytes().into(),
         });
         write_packet(&mut c, &p, V5).await.unwrap();
     }

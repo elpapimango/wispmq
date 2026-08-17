@@ -111,7 +111,7 @@ async fn qos1_publish_is_routed_to_subscriber() {
         topic: "sensors/temp".into(),
         packet_id: Some(10),
         properties: Properties::new(),
-        payload: b"22.4C".to_vec(),
+        payload: b"22.4C"[..].into(),
     });
     write_packet(&mut pubr, &publish, V5).await.unwrap();
     // Publisher gets a PUBACK.
@@ -128,7 +128,7 @@ async fn qos1_publish_is_routed_to_subscriber() {
     match received {
         ReadOutcome::Packet(Packet::Publish(p), _) => {
             assert_eq!(p.topic, "sensors/temp");
-            assert_eq!(p.payload, b"22.4C");
+            assert_eq!(&p.payload[..], b"22.4C");
             assert_eq!(p.qos, QoS::AtLeastOnce);
         }
         _ => panic!("expected forwarded PUBLISH"),
@@ -148,7 +148,7 @@ async fn retained_message_delivered_on_subscribe() {
         topic: "state/lamp".into(),
         packet_id: None,
         properties: Properties::new(),
-        payload: b"on".to_vec(),
+        payload: b"on"[..].into(),
     });
     write_packet(&mut pubr, &publish, V5).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -178,7 +178,7 @@ async fn retained_message_delivered_on_subscribe() {
                 .unwrap();
         if let ReadOutcome::Packet(Packet::Publish(p), _) = outcome {
             assert_eq!(p.topic, "state/lamp");
-            assert_eq!(p.payload, b"on");
+            assert_eq!(&p.payload[..], b"on");
             assert!(p.retain, "retained delivery must set the RETAIN flag");
             saw_publish = true;
         }

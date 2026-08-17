@@ -1,6 +1,7 @@
 //! The application message that flows through the broker, decoupled from the
 //! wire-level PUBLISH packet so it can be queued, retained and persisted.
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::codec::Properties;
@@ -11,7 +12,9 @@ use crate::types::QoS;
 #[derive(Debug, Clone)]
 pub struct Message {
     pub topic: String,
-    pub payload: Vec<u8>,
+    /// Shared payload — see [`crate::packet::Publish::payload`] for why this is
+    /// an `Arc` and not a `Vec`.
+    pub payload: Arc<[u8]>,
     pub qos: QoS,
     pub retain: bool,
     /// Publication properties that are forwarded to subscribers: payload

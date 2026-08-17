@@ -254,7 +254,7 @@ fn load_all(conn: &Connection) -> Result<LoadedState> {
         let (topic, payload, qos, pf, ct, rt, cd, up, exp) = row?;
         let message = Message {
             topic: topic.clone(),
-            payload,
+            payload: payload.into(),
             qos: QoS::from_u8(qos as u8).unwrap_or(QoS::AtMostOnce),
             retain: true,
             payload_format_indicator: pf.map(|v| v as u8),
@@ -457,5 +457,66 @@ mod tests {
         let storage = Storage::null();
         storage.delete_retained("x".into());
         assert!(!storage.writer_lost.load(Ordering::Relaxed));
+    }
+
+    /// A retained message must survive a write/reopen cycle byte for byte.
+    ///
+    /// The payload crosses three representations on this path — `Arc<[u8]>` in
+    /// `Message`, a SQLite BLOB on disk, and a `Vec<u8>` on the way back — so
+    /// this pins the conversion at both ends. It also covers a payload with
+    /// embedded NULs and high bytes, which would survive a text column but not
+    /// a mangled one.
+    #[test]
+    fn retained_message_survives_a_reopen() {
+        let dir = std::env::temp_dir().join(format!("pulsemq-storage-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("retained.db");
+        let path_str = path.to_str().unwrap().to_string();
+        let _ = std::fs::remove_file(&path);
+
+        let payload: Vec<u8> = vec![0x00, 0xff, b'h', b'i', 0x00, 0x80, 0x7f];
+        let message = Message {
+            topic: "sensors/kitchen".to_string(),
+            payload: payload.clone().into(),
+            qos: QoS::ExactlyOnce,
+            retain: true,
+            payload_format_indicator: Some(0),
+            content_type: Some("application/octet-stream".to_string()),
+            response_topic: Some("reply/here".to_string()),
+            correlation_data: Some(vec![1, 2, 3]),
+            user_properties: vec![("k".to_string(), "v".to_string())],
+            expires_at: None,
+        };
+
+        {
+            let (storage, loaded) = Storage::open(&path_str).unwrap();
+            assert!(loaded.retained.is_empty(), "fresh db should be empty");
+            storage.upsert_retained(message.topic.clone(), message.clone());
+            // Dropping the handle closes the command channel, and the writer
+            // thread drains what is queued before exiting, so the row is on
+            // disk by the time the reopen below runs.
+            drop(storage);
+        }
+
+        let (_storage, loaded) = Storage::open(&path_str).unwrap();
+        let (_, restored) = loaded
+            .retained
+            .iter()
+            .find(|(topic, _)| topic == "sensors/kitchen")
+            .expect("retained message should have been reloaded");
+        assert_eq!(&restored.payload[..], &payload[..]);
+        assert_eq!(restored.qos, QoS::ExactlyOnce);
+        assert_eq!(
+            restored.content_type.as_deref(),
+            Some("application/octet-stream")
+        );
+        assert_eq!(restored.response_topic.as_deref(), Some("reply/here"));
+        assert_eq!(restored.correlation_data.as_deref(), Some(&[1u8, 2, 3][..]));
+        assert_eq!(
+            restored.user_properties,
+            vec![("k".to_string(), "v".to_string())]
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }

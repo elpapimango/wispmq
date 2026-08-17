@@ -35,7 +35,7 @@ fn bare_broker() -> Broker {
 fn message(topic: &str, payload_len: usize) -> Message {
     Message {
         topic: topic.to_string(),
-        payload: vec![0xab; payload_len],
+        payload: vec![0xab; payload_len].into(),
         qos: QoS::AtMostOnce,
         retain: false,
         payload_format_indicator: None,

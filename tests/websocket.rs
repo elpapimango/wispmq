@@ -69,7 +69,7 @@ fn publish_packet(topic: &str, payload: &[u8]) -> Packet {
         topic: topic.into(),
         packet_id: Some(7),
         properties: Properties::new(),
-        payload: payload.to_vec(),
+        payload: payload.into(),
     })
 }
 
@@ -166,7 +166,7 @@ async fn round_trip<S>(
     match recv(sub, version).await {
         Packet::Publish(p) => {
             assert_eq!(p.topic, "ws/hello");
-            assert_eq!(p.payload, b"over-websockets");
+            assert_eq!(&p.payload[..], b"over-websockets");
         }
         other => panic!("expected forwarded PUBLISH, got {}", other.name()),
     }

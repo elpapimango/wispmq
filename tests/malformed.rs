@@ -50,7 +50,7 @@ fn seeds() -> Vec<Vec<u8>> {
         topic: "a/b/c".into(),
         packet_id: Some(7),
         properties: Properties::new(),
-        payload: b"hello world".to_vec(),
+        payload: b"hello world"[..].into(),
     });
 
     let subscribe = Packet::Subscribe(Subscribe {
@@ -209,13 +209,13 @@ fn round_trip_seeds_still_decode() {
             topic: "sanity/check".into(),
             packet_id: None,
             properties: Properties::new(),
-            payload: b"payload".to_vec(),
+            payload: b"payload"[..].into(),
         });
         let bytes = p.encode(version).expect("seed encodes");
         match Packet::decode(&bytes, version) {
             Ok(Packet::Publish(d)) => {
                 assert_eq!(d.topic, "sanity/check");
-                assert_eq!(d.payload, b"payload");
+                assert_eq!(&d.payload[..], b"payload");
             }
             other => panic!("seed did not round-trip on {version:?}: {other:?}"),
         }

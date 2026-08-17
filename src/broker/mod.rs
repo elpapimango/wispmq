@@ -480,7 +480,7 @@ impl Broker {
         for (topic, payload) in entries {
             let message = Message {
                 topic: topic.clone(),
-                payload: payload.as_bytes().to_vec(),
+                payload: std::sync::Arc::from(payload.as_bytes()),
                 qos: QoS::AtMostOnce,
                 retain: true,
                 payload_format_indicator: Some(1), // UTF-8 text
@@ -1391,7 +1391,9 @@ fn message_from_will(w: &crate::packet::Will) -> Message {
         .map(|s| crate::message::now_unix().saturating_add(s as u64));
     Message {
         topic: w.topic.clone(),
-        payload: w.payload.clone(),
+        // The Will arrives in CONNECT as a `Vec`, so this is the one place the
+        // payload is copied into its `Arc` — once per will, not per delivery.
+        payload: std::sync::Arc::from(w.payload.as_slice()),
         qos: w.qos,
         retain: w.retain,
         payload_format_indicator: w.properties.payload_format_indicator,

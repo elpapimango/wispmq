@@ -127,7 +127,7 @@ async fn offline_session_queue_is_bounded() {
             topic: "load/x".into(),
             packet_id: Some((i % 65535 + 1) as u16),
             properties: Properties::new(),
-            payload: format!("msg-{i}").into_bytes(),
+            payload: format!("msg-{i}").into_bytes().into(),
         });
         write_packet(&mut pubr, &p, V5).await.unwrap();
         // Drain the PUBACK so the socket buffer cannot stall the flood.
@@ -180,7 +180,7 @@ async fn zero_means_unlimited() {
             topic: "load/x".into(),
             packet_id: Some((i % 65535 + 1) as u16),
             properties: Properties::new(),
-            payload: format!("m{i}").into_bytes(),
+            payload: format!("m{i}").into_bytes().into(),
         });
         write_packet(&mut pubr, &p, V5).await.unwrap();
         let _ = read_packet(&mut pubr, 1 << 20, V5).await.unwrap();

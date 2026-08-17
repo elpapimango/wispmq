@@ -1,6 +1,8 @@
 //! PUBLISH (3.3) and the acknowledgement family PUBACK/PUBREC/PUBREL/PUBCOMP
 //! (3.4 – 3.7), which share an identical structure.
 
+use std::sync::Arc;
+
 use crate::codec::{Properties, Reader, Writer};
 use crate::error::{malformed, Result};
 use crate::types::{ProtocolVersion, QoS, ReasonCode};
@@ -14,7 +16,15 @@ pub struct Publish {
     /// Present iff QoS > 0.
     pub packet_id: Option<u16>,
     pub properties: Properties,
-    pub payload: Vec<u8>,
+    /// Application Message payload (3.3.3).
+    ///
+    /// `Arc<[u8]>` rather than `Vec<u8>` because routing builds one `Publish`
+    /// per recipient from the same message, and QoS>0 clones it again into the
+    /// retransmission buffer. With a `Vec` each of those copied the payload;
+    /// fan-out to 100 subscribers of a 64 KiB message cost ~51 us per recipient
+    /// (see `tests/bench_routing.rs`). Payloads are never mutated after decode,
+    /// so sharing is free.
+    pub payload: Arc<[u8]>,
 }
 
 impl Publish {
@@ -43,7 +53,7 @@ impl Publish {
         } else {
             Properties::new()
         };
-        let payload = r.rest().to_vec();
+        let payload: Arc<[u8]> = Arc::from(r.rest());
 
         Ok(Publish {
             dup,

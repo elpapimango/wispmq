@@ -126,7 +126,7 @@ async fn publish(s: &mut TcpStream, topic: &str, payload: &[u8], qos: QoS) {
         topic: topic.into(),
         packet_id,
         properties: Properties::new(),
-        payload: payload.to_vec(),
+        payload: payload.into(),
     });
     write_packet(s, &p, V5).await.unwrap();
     if qos == QoS::AtLeastOnce {
@@ -146,7 +146,7 @@ async fn expect_publish(s: &mut TcpStream) -> (String, Vec<u8>) {
             .expect("timed out waiting for forwarded PUBLISH")
             .unwrap();
         if let ReadOutcome::Packet(Packet::Publish(p), _) = out {
-            return (p.topic, p.payload);
+            return (p.topic, p.payload.to_vec());
         }
     }
 }
