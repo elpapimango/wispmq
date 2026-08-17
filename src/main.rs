@@ -15,18 +15,12 @@ use pulsemq::storage::Storage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // `--hash-password [username]`: print a credential-file line and exit.
-    let raw_args: Vec<String> = std::env::args().collect();
-    if let Some(pos) = raw_args.iter().position(|a| a == "--hash-password") {
-        let username = raw_args.get(pos + 1).filter(|s| !s.starts_with('-'));
-        return hash_password_cmd(username.map(String::as_str));
-    }
-
     // Resolve configuration (file < env < CLI) before anything else so
-    // --help/--version print cleanly and bad input fails fast without log noise.
+    // --help/--version print cleanly and bad input fails fast without log
+    // noise. `--hash-password` is answered here too, before any state is opened.
     let config = match Config::load() {
         Ok(Startup::Run(cfg)) => *cfg,
-        Ok(Startup::Exit) => return Ok(()),
+        Ok(Startup::HashPassword(user)) => return hash_password_cmd(user.as_deref()),
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(2);

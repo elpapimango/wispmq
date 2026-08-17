@@ -80,6 +80,9 @@ Done since 1.0.0:
   a Will authorization bypass across ACL reload, and the unbounded offline
   queue (`max_queued_messages`). Secrets are wrapped in `config::Secret`.
 - (3) **Config file is JSON** — `serde_json`, `pulsemq.json`, no `yaml-rust2`.
+- (4) **`clap` parses the CLI** — the hand-rolled `apply_args`/`HELP` are gone;
+  flags live in a `#[derive(Parser)]` struct in `cli.rs`. Env stays in
+  `apply_env` so the precedence layers do not collapse.
 - (2) **Metrics** — mosquitto-parity broker status on both surfaces:
   `$SYS/broker/...` retained topics (`sysinfo.rs`, `sys_interval`) and
   Prometheus series, incl. per-control-packet counters. `load/*` moving
@@ -87,10 +90,10 @@ Done since 1.0.0:
 
 Remaining, in order:
 
-4. **`clap` for CLI parsing** (replaces the hand-rolled `apply_args` + `HELP`).
 5C. **Refactor/optimize** — split `broker/mod.rs` (1.3k lines); `topic::matches`
    allocates two `Vec`s per call on the routing hot path. Measure before adding
-   a topic trie. `config.rs` shrank with the JSON move, so it is less urgent.
+   a topic trie. `config.rs` shrank with the JSON and clap moves, so it is no
+   longer a target.
 6. **Telemetry/log export** to Datadog/Splunk/OTLP — OTLP first, feature-gated.
    Reuse the existing `Snapshot` rather than building a parallel counter set.
 
@@ -135,6 +138,7 @@ before changing it.
   (`to_prometheus`, `to_sys_topics`) so the surfaces cannot disagree
 - `sysinfo` — periodic `$SYS/broker/...` publisher (retained, `sys_interval`)
 - `admin` — HTTP server: `/health`, Prometheus `/metrics`, MCP `/mcp`
+- `cli` — the `clap` `Cli` struct: one `Option` field per flag, applied last
 - `config` — layered configuration (see below)
 
 ### Concurrency model (important)
@@ -197,13 +201,13 @@ Precedence, lowest to highest: **defaults < JSON config file < env vars < CLI
 flags**. Entry point is `Config::load()`. `pulsemq.json` in the cwd is
 auto-loaded; `--config` / `MQTT_CONFIG_FILE` overrides. When adding a new option,
 wire it in **all** places: the `Config` struct + `Default`, `apply_env`,
-`apply_args` (+ `HELP` text), `apply_json_str` (+ `KNOWN_KEYS`), the README
-tables, and `pulsemq.example.json`. There are unit tests in `config` covering
-each layer — extend them.
+the `cli::Cli` struct (+ its `apply`), `apply_json_str` (+ `KNOWN_KEYS`), the
+README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
+`config` covering each layer — extend them.
 
 ## Tests
 
-47 tests. Unit tests live in-module (`topic`, `acl`, `config`, `auth`,
+54 tests. Unit tests live in-module (`topic`, `acl`, `cli`, `config`, `auth`,
 `storage`); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
@@ -284,15 +288,16 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (47 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (54 tests), then
   `cargo run -- --help`.
 
 ## Conventions
 
 - Keep the dependency surface small and justified; prefer std + the existing crates.
 - When adding a config option, wire it through Config + Default, `apply_env`,
-  `apply_args` (+ HELP), `apply_json_str` (+ `KNOWN_KEYS`), README, and
-  `pulsemq.example.json` — with tests. (See the Configuration checklist.)
+  the `cli::Cli` struct (+ its `apply`), `apply_json_str` (+ `KNOWN_KEYS`),
+  README, and `pulsemq.example.json` — with tests. (See the Configuration
+  checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.

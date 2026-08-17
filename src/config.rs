@@ -1,10 +1,17 @@
-//! Broker configuration, populated from environment variables with sensible
-//! defaults so the server runs out of the box.
+//! Broker configuration, layered from four sources — defaults, a JSON config
+//! file, environment variables, then command-line flags — each overriding the
+//! previous, so the server runs out of the box with nothing configured.
+//!
+//! [`Config::load`] drives the whole pipeline. The command-line layer lives in
+//! [`crate::cli`]; this module owns the defaults, the env layer, and the JSON
+//! file layer.
 
 use std::net::SocketAddr;
 
+use clap::Parser;
 use serde_json::Value;
 
+use crate::cli::Cli;
 use crate::error::{MqttError, Result};
 use crate::types::QoS;
 
@@ -300,31 +307,31 @@ fn overlay_opt(slot: &mut Option<String>, value: Option<String>) {
 impl Config {
     /// Full configuration pipeline: defaults, then a JSON config file (if any),
     /// then environment variables, then command-line flags — each layer
-    /// overriding the previous. Returns `Startup::Exit` for `--help`/`--version`.
+    /// overriding the previous.
     pub fn load() -> Result<Startup> {
-        let args: Vec<String> = std::env::args().skip(1).collect();
+        // clap renders `--help`/`--version` and usage errors itself and exits
+        // with 0 and 2 respectively, so nothing below has to special-case them
+        // and they work even when the config file is missing or malformed.
+        Config::from_cli(Cli::parse())
+    }
 
-        // Handle --help/--version up front so they work even if a config file
-        // is missing or malformed.
-        for a in &args {
-            match a.as_str() {
-                "-h" | "--help" => {
-                    print!("{HELP}");
-                    return Ok(Startup::Exit);
-                }
-                "-V" | "--version" => {
-                    println!("pulsemq {VERSION}");
-                    return Ok(Startup::Exit);
-                }
-                _ => {}
-            }
+    /// The layering itself, with the command line already parsed. Split out
+    /// from [`Config::load`] so it does not depend on the process's argv.
+    fn from_cli(cli: Cli) -> Result<Startup> {
+        // `--hash-password` is a one-shot helper: answer it before reading the
+        // config file, so a broken pulsemq.json cannot block hashing a password.
+        if let Some(user) = cli.hash_password {
+            return Ok(Startup::HashPassword(user));
         }
 
         let mut cfg = Config::default();
 
         // Config file: an explicit --config / MQTT_CONFIG_FILE path must exist;
         // otherwise fall back to a default file in the working directory.
-        let explicit = cli_config_path(&args).or_else(|| non_empty_env("MQTT_CONFIG_FILE"));
+        let explicit = cli
+            .config
+            .clone()
+            .or_else(|| non_empty_env("MQTT_CONFIG_FILE"));
         match explicit {
             Some(path) => cfg.apply_json_file(&path)?,
             None => {
@@ -335,7 +342,8 @@ impl Config {
         }
 
         cfg.apply_env();
-        cfg.apply_args(&args)
+        cli.apply(&mut cfg);
+        Ok(Startup::Run(Box::new(cfg)))
     }
 
     /// Read and apply a JSON config file, recording its path.
@@ -482,21 +490,6 @@ impl Config {
     }
 }
 
-/// The first `--config`/`--config=PATH` value found in the arguments.
-fn cli_config_path(args: &[String]) -> Option<String> {
-    let mut i = 0;
-    while i < args.len() {
-        if let Some(v) = args[i].strip_prefix("--config=") {
-            return Some(v.to_string());
-        }
-        if args[i] == "--config" {
-            return args.get(i + 1).cloned();
-        }
-        i += 1;
-    }
-    None
-}
-
 /// A default config file present in the working directory, if any.
 fn default_config_file() -> Option<String> {
     DEFAULT_CONFIG_FILES
@@ -568,194 +561,13 @@ fn non_empty_env(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// Outcome of parsing the command line.
+/// Outcome of resolving the configuration.
 pub enum Startup {
     /// Run the broker with this configuration.
     Run(Box<Config>),
-    /// `--help` or `--version` was handled; the process should exit 0.
-    Exit,
-}
-
-/// `--help` text. Kept in sync with the option table below.
-pub const HELP: &str = "\
-PulseMQ — an MQTT v5.0 / v3.1.1 / v3.1 broker (Tokio + SQLite)
-
-USAGE:
-    pulsemq [OPTIONS]
-
-Every option can also be set via the environment variable shown in brackets, or
-in a JSON config file (key = the option name with underscores, e.g. listen_addr).
-Precedence, lowest to highest: config file < environment < command-line flags.
-
-CONFIG FILE:
-    --config <FILE>               Load this JSON config file [MQTT_CONFIG_FILE].
-                                  If omitted, pulsemq.json in the working
-                                  directory is used when present.
-
-NETWORK:
-    --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
-                                  (default 0.0.0.0:1883)
-    --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
-                                  (default 127.0.0.1:9001)
-
-MQTT TLS:
-    --tls-cert <FILE>             PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
-    --tls-key <FILE>              PEM private key for the MQTT port [MQTT_TLS_KEY]
-    --tls-client-ca <FILE>        PEM CA bundle; enables mutual TLS on the MQTT
-                                  port (clients must present a trusted cert)
-                                  [MQTT_TLS_CLIENT_CA]
-
-MQTT OVER WEBSOCKETS:
-    --ws-listen-addr <ADDR>       Enable the WebSocket listener on this address
-                                  (subprotocol \"mqtt\") [MQTT_WS_LISTEN_ADDR]
-    --ws-tls-cert <FILE>          PEM certificate chain for the WS port (wss://)
-                                  [MQTT_WS_TLS_CERT]
-    --ws-tls-key <FILE>           PEM private key for the WS port [MQTT_WS_TLS_KEY]
-    --ws-tls-client-ca <FILE>     PEM CA bundle; enables mutual TLS on the WS
-                                  port [MQTT_WS_TLS_CLIENT_CA]
-
-ADMIN TLS & AUTH:
-    --admin-tls-cert <FILE>       PEM certificate chain for the admin port [MQTT_ADMIN_TLS_CERT]
-    --admin-tls-key <FILE>        PEM private key for the admin port [MQTT_ADMIN_TLS_KEY]
-    --admin-tls-client-ca <FILE>  PEM CA bundle; enables mutual TLS on the admin
-                                  port [MQTT_ADMIN_TLS_CLIENT_CA]
-    --admin-token <TOKEN>         Bearer token required for /metrics and /mcp
-                                  (unset = open) [MQTT_ADMIN_TOKEN]
-
-AUTHENTICATION & AUTHORIZATION:
-    --password-file <FILE>        Username/password credential file; when set,
-                                  clients must authenticate [MQTT_PASSWORD_FILE]
-    --allow-anonymous <BOOL>      Allow clients with no credentials when a
-                                  password file is set [MQTT_ALLOW_ANONYMOUS]
-                                  (default false)
-    --acl-file <FILE>             JSON ACL policy authorizing publish/subscribe
-                                  per identity (unset = allow all) [MQTT_ACL_FILE]
-    --hash-password [USERNAME]    Read a password from stdin, print a credential
-                                  line, and exit (helper for --password-file)
-
-STORAGE & LIMITS:
-    --db-path <FILE>              SQLite database file [MQTT_DB_PATH]
-                                  (default mqtt_broker.db)
-    --max-packet-size <BYTES>     Maximum accepted packet size [MQTT_MAX_PACKET_SIZE]
-                                  (default 1048576)
-    --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
-                                  (default 64)
-    --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
-    --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
-    --sys-interval <SECS>         $SYS/broker status refresh interval, 0=disable [MQTT_SYS_INTERVAL]
-                                  (default 3600)
-
-PROTOCOL CAPABILITIES (advertised in CONNACK):
-    --maximum-qos <0|1|2>         Highest QoS the server supports [MQTT_MAXIMUM_QOS]
-                                  (default 2)
-    --retain-available <BOOL>     Whether retained messages are supported
-                                  [MQTT_RETAIN_AVAILABLE] (default true)
-    --topic-alias-maximum <N>     Topic Alias Maximum granted to clients
-                                  [MQTT_TOPIC_ALIAS_MAXIMUM] (default 16)
-    --server-keep-alive <SECS>    Override the client's Keep Alive
-                                  [MQTT_SERVER_KEEP_ALIVE] (default: honour client)
-
-OTHER:
-    -h, --help                    Print this help and exit
-    -V, --version                 Print version and exit
-
-Logging verbosity is controlled by RUST_LOG (default: info).
-";
-
-impl Config {
-    /// Apply CLI overrides onto an existing config. Split out for testing.
-    pub fn apply_args(mut self, args: &[String]) -> Result<Startup> {
-        let mut i = 0;
-        while i < args.len() {
-            // Support both `--flag value` and `--flag=value`.
-            let (name, inline) = match args[i].split_once('=') {
-                Some((n, v)) => (n.to_string(), Some(v.to_string())),
-                None => (args[i].clone(), None),
-            };
-
-            // Fetch this flag's value from `=value` or the following argument.
-            let value = |i: &mut usize| -> Result<String> {
-                if let Some(v) = inline.clone() {
-                    return Ok(v);
-                }
-                *i += 1;
-                args.get(*i)
-                    .cloned()
-                    .ok_or_else(|| MqttError::Config(format!("option {name} requires a value")))
-            };
-
-            match name.as_str() {
-                "-h" | "--help" => {
-                    print!("{HELP}");
-                    return Ok(Startup::Exit);
-                }
-                "-V" | "--version" => {
-                    println!("pulsemq {VERSION}");
-                    return Ok(Startup::Exit);
-                }
-                // Already resolved before env/args were applied; consume value.
-                "--config" => {
-                    let _ = value(&mut i)?;
-                }
-                "--listen-addr" => self.listen_addr = parse_addr(&value(&mut i)?, "--listen-addr")?,
-                "--admin-addr" => self.admin_addr = parse_addr(&value(&mut i)?, "--admin-addr")?,
-                "--tls-cert" => self.tls_cert = Some(value(&mut i)?),
-                "--tls-key" => self.tls_key = Some(value(&mut i)?),
-                "--tls-client-ca" => self.tls_client_ca = Some(value(&mut i)?),
-                "--ws-listen-addr" => {
-                    self.ws_listen_addr = Some(parse_addr(&value(&mut i)?, "--ws-listen-addr")?)
-                }
-                "--ws-tls-cert" => self.ws_tls_cert = Some(value(&mut i)?),
-                "--ws-tls-key" => self.ws_tls_key = Some(value(&mut i)?),
-                "--ws-tls-client-ca" => self.ws_tls_client_ca = Some(value(&mut i)?),
-                "--admin-tls-cert" => self.admin_tls_cert = Some(value(&mut i)?),
-                "--admin-tls-key" => self.admin_tls_key = Some(value(&mut i)?),
-                "--admin-tls-client-ca" => self.admin_tls_client_ca = Some(value(&mut i)?),
-                "--admin-token" => self.admin_token = Some(Secret::new(value(&mut i)?)),
-                "--acl-file" => self.acl_path = Some(value(&mut i)?),
-                "--password-file" => self.password_file = Some(value(&mut i)?),
-                "--allow-anonymous" => {
-                    self.allow_anonymous = parse_bool_arg(&value(&mut i)?, "--allow-anonymous")?
-                }
-                "--db-path" => self.db_path = value(&mut i)?,
-                "--max-packet-size" => {
-                    self.max_packet_size = parse_num(&value(&mut i)?, "--max-packet-size")?
-                }
-                "--receive-maximum" => {
-                    self.receive_maximum = parse_num(&value(&mut i)?, "--receive-maximum")?
-                }
-                "--max-session-expiry" => {
-                    self.max_session_expiry = parse_num(&value(&mut i)?, "--max-session-expiry")?
-                }
-                "--max-queued-messages" => {
-                    self.max_queued_messages = parse_num(&value(&mut i)?, "--max-queued-messages")?
-                }
-                "--sys-interval" => {
-                    self.sys_interval = parse_num(&value(&mut i)?, "--sys-interval")?
-                }
-                "--maximum-qos" => {
-                    self.maximum_qos = parse_qos_arg(&value(&mut i)?, "--maximum-qos")?
-                }
-                "--retain-available" => {
-                    self.retain_available = parse_bool_arg(&value(&mut i)?, "--retain-available")?
-                }
-                "--topic-alias-maximum" => {
-                    self.topic_alias_maximum = parse_num(&value(&mut i)?, "--topic-alias-maximum")?
-                }
-                "--server-keep-alive" => {
-                    self.server_keep_alive =
-                        Some(parse_num(&value(&mut i)?, "--server-keep-alive")?)
-                }
-                other => {
-                    return Err(MqttError::Config(format!(
-                        "unknown option: {other}\n\nRun with --help to list available options."
-                    )));
-                }
-            }
-            i += 1;
-        }
-        Ok(Startup::Run(Box::new(self)))
-    }
+    /// `--hash-password [USERNAME]` was passed: print a credential line for
+    /// that user (or just the hash, when no username was given) and exit.
+    HashPassword(Option<String>),
 }
 
 fn parse_addr(v: &str, flag: &str) -> Result<SocketAddr> {
@@ -763,21 +575,18 @@ fn parse_addr(v: &str, flag: &str) -> Result<SocketAddr> {
         .map_err(|_| MqttError::Config(format!("{flag}: invalid socket address {v:?}")))
 }
 
-fn parse_num<T: std::str::FromStr>(v: &str, flag: &str) -> Result<T> {
-    v.parse()
-        .map_err(|_| MqttError::Config(format!("{flag}: invalid number {v:?}")))
-}
-
-/// Parse a Maximum QoS value (0, 1, or 2). Lenient: returns `None` on garbage.
-fn parse_qos_value(v: &str) -> Option<QoS> {
+/// Parse a Maximum QoS value (0, 1, or 2). Returns `None` on garbage; callers
+/// decide whether that is an error (the CLI) or an ignored value (the env).
+pub(crate) fn parse_qos_value(v: &str) -> Option<QoS> {
     v.trim()
         .parse::<u8>()
         .ok()
         .and_then(|n| QoS::from_u8(n).ok())
 }
 
-/// Parse a boolean from common spellings. Lenient: returns `None` on garbage.
-fn parse_bool_value(v: &str) -> Option<bool> {
+/// Parse a boolean from common spellings. Lenient in the same way as
+/// [`parse_qos_value`].
+pub(crate) fn parse_bool_value(v: &str) -> Option<bool> {
     match v.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
         "false" | "0" | "no" | "off" => Some(false),
@@ -785,51 +594,12 @@ fn parse_bool_value(v: &str) -> Option<bool> {
     }
 }
 
-fn parse_qos_arg(v: &str, flag: &str) -> Result<QoS> {
-    parse_qos_value(v).ok_or_else(|| MqttError::Config(format!("{flag}: expected 0, 1, or 2")))
-}
-
-fn parse_bool_arg(v: &str, flag: &str) -> Result<bool> {
-    parse_bool_value(v).ok_or_else(|| MqttError::Config(format!("{flag}: expected true or false")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn cli_overrides_and_parses() {
-        let args: Vec<String> = [
-            "--listen-addr",
-            "127.0.0.1:1",
-            "--receive-maximum",
-            "10",
-            "--tls-cert",
-            "c.pem",
-            "--tls-key",
-            "k.pem",
-            "--tls-client-ca",
-            "ca.pem",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let cfg = match Config::default().apply_args(&args).unwrap() {
-            Startup::Run(c) => *c,
-            Startup::Exit => panic!("unexpected exit"),
-        };
-        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1");
-        assert_eq!(cfg.receive_maximum, 10);
-        assert_eq!(cfg.tls_client_ca.as_deref(), Some("ca.pem"));
-    }
-
-    #[test]
-    fn equals_form_and_unknown_flag() {
-        let ok = Config::default().apply_args(&["--db-path=/tmp/x.db".to_string()]);
-        assert!(matches!(ok, Ok(Startup::Run(_))));
-        let bad = Config::default().apply_args(&["--nope".to_string()]);
-        assert!(bad.is_err());
-    }
+    // The command-line layer is tested in `crate::cli`, including its
+    // precedence over the env and file layers exercised here.
 
     #[test]
     fn json_config_applies_all_field_kinds() {
@@ -862,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_bound_defaults_on_and_cli_overrides_file() {
+    fn queue_bound_defaults_on() {
         // The cap must be on by default: 1.0.0 shipped with an unbounded
         // offline queue, which is the memory-exhaustion path this closes.
         assert_eq!(Config::default().max_queued_messages, 1000);
@@ -872,41 +642,11 @@ mod tests {
             .unwrap();
         assert_eq!(cfg.max_queued_messages, 5);
 
-        // CLI still wins over the file.
-        let cfg = match cfg
-            .apply_args(&["--max-queued-messages".into(), "7".into()])
-            .unwrap()
-        {
-            Startup::Run(c) => *c,
-            Startup::Exit => panic!("unexpected exit"),
-        };
-        assert_eq!(cfg.max_queued_messages, 7);
-
         // 0 is a legal opt-out, not a parse error.
         let mut cfg = Config::default();
         cfg.apply_json_str(r#"{"max_queued_messages": 0}"#, "t.json")
             .unwrap();
         assert_eq!(cfg.max_queued_messages, 0);
-    }
-
-    #[test]
-    fn cli_flags_override_config_file() {
-        let mut cfg = Config::default();
-        cfg.apply_json_str(
-            r#"{"listen_addr": "127.0.0.1:1", "receive_maximum": 5}"#,
-            "t.json",
-        )
-        .unwrap();
-        // CLI applied on top of the file wins.
-        let cfg = match cfg
-            .apply_args(&["--receive-maximum".into(), "42".into()])
-            .unwrap()
-        {
-            Startup::Run(c) => *c,
-            Startup::Exit => panic!("unexpected exit"),
-        };
-        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1"); // from file
-        assert_eq!(cfg.receive_maximum, 42); // CLI override
     }
 
     #[test]
@@ -950,32 +690,6 @@ mod tests {
         let mut bad = Config::default();
         assert!(bad
             .apply_json_str(r#"{"retain_available": "yes"}"#, "t.json")
-            .is_err());
-    }
-
-    #[test]
-    fn cli_protocol_capabilities() {
-        let args: Vec<String> = [
-            "--maximum-qos",
-            "0",
-            "--retain-available",
-            "false",
-            "--server-keep-alive",
-            "45",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let cfg = match Config::default().apply_args(&args).unwrap() {
-            Startup::Run(c) => *c,
-            Startup::Exit => panic!("unexpected exit"),
-        };
-        assert_eq!(cfg.maximum_qos, QoS::AtMostOnce);
-        assert!(!cfg.retain_available);
-        assert_eq!(cfg.server_keep_alive, Some(45));
-        // Invalid QoS on the CLI is a hard error.
-        assert!(Config::default()
-            .apply_args(&["--maximum-qos".into(), "9".into()])
             .is_err());
     }
 

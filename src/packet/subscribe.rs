@@ -146,7 +146,7 @@ impl SubAck {
         };
         let mut reason_codes = Vec::new();
         // v3.x UNSUBACK has no payload after the packet id.
-        if !(unsuback && !version.has_properties()) {
+        if !unsuback || version.has_properties() {
             while r.has_remaining() {
                 reason_codes.push(ReasonCode::from_u8(r.u8()?)?);
             }

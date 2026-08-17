@@ -184,48 +184,55 @@ variable. Run `--help` for the full list:
 ```
 
 ```
-CONFIG FILE:
-    --config <FILE>               Load a JSON config file [MQTT_CONFIG_FILE]
-NETWORK:
-    --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
-    --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+Config file:
+      --config <FILE>               Load this JSON config file [MQTT_CONFIG_FILE]
+Network:
+      --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
+      --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
 MQTT TLS:
-    --tls-cert <FILE>             PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
-    --tls-key <FILE>              PEM private key for the MQTT port [MQTT_TLS_KEY]
-    --tls-client-ca <FILE>        PEM CA bundle; enables mutual TLS [MQTT_TLS_CLIENT_CA]
-MQTT OVER WEBSOCKETS:
-    --ws-listen-addr <ADDR>       Enable the WebSocket listener [MQTT_WS_LISTEN_ADDR]
-    --ws-tls-cert <FILE>          PEM certificate chain for the WS port [MQTT_WS_TLS_CERT]
-    --ws-tls-key <FILE>           PEM private key for the WS port [MQTT_WS_TLS_KEY]
-    --ws-tls-client-ca <FILE>     PEM CA bundle; enables mutual TLS [MQTT_WS_TLS_CLIENT_CA]
-ADMIN TLS & AUTH:
-    --admin-tls-cert <FILE>       PEM certificate chain for the admin port [MQTT_ADMIN_TLS_CERT]
-    --admin-tls-key <FILE>        PEM private key for the admin port [MQTT_ADMIN_TLS_KEY]
-    --admin-tls-client-ca <FILE>  PEM CA bundle; enables mutual TLS [MQTT_ADMIN_TLS_CLIENT_CA]
-    --admin-token <TOKEN>         Bearer token for /metrics and /mcp [MQTT_ADMIN_TOKEN]
-AUTHENTICATION & AUTHORIZATION:
-    --password-file <FILE>        Username/password credentials [MQTT_PASSWORD_FILE]
-    --allow-anonymous <BOOL>      Allow credential-less clients [MQTT_ALLOW_ANONYMOUS]
-    --acl-file <FILE>             JSON ACL policy per identity [MQTT_ACL_FILE]
-    --hash-password [USERNAME]    Print a credential line (password from stdin) and exit
-STORAGE & LIMITS:
-    --db-path <FILE>              SQLite database file [MQTT_DB_PATH]
-    --max-packet-size <BYTES>     Maximum accepted packet size [MQTT_MAX_PACKET_SIZE]
-    --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
-    --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
-    --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
-    --sys-interval <SECS>         $SYS/broker status refresh interval, 0=disable [MQTT_SYS_INTERVAL]
-PROTOCOL CAPABILITIES:
-    --maximum-qos <0|1|2>         Highest QoS supported [MQTT_MAXIMUM_QOS]
-    --retain-available <BOOL>     Retained messages supported [MQTT_RETAIN_AVAILABLE]
-    --topic-alias-maximum <N>     Topic Alias Maximum [MQTT_TOPIC_ALIAS_MAXIMUM]
-    --server-keep-alive <SECS>    Override client Keep Alive [MQTT_SERVER_KEEP_ALIVE]
-OTHER:
-    -h, --help                    Print help and exit
-    -V, --version                 Print version and exit
+      --tls-cert <FILE>             PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
+      --tls-key <FILE>              PEM private key for the MQTT port [MQTT_TLS_KEY]
+      --tls-client-ca <FILE>        PEM CA bundle; enables mutual TLS [MQTT_TLS_CLIENT_CA]
+MQTT over WebSockets:
+      --ws-listen-addr <ADDR>       Enable the WebSocket listener [MQTT_WS_LISTEN_ADDR]
+      --ws-tls-cert <FILE>          PEM certificate chain for the WS port [MQTT_WS_TLS_CERT]
+      --ws-tls-key <FILE>           PEM private key for the WS port [MQTT_WS_TLS_KEY]
+      --ws-tls-client-ca <FILE>     PEM CA bundle; enables mutual TLS [MQTT_WS_TLS_CLIENT_CA]
+Admin TLS & auth:
+      --admin-tls-cert <FILE>       PEM certificate chain for the admin port [MQTT_ADMIN_TLS_CERT]
+      --admin-tls-key <FILE>        PEM private key for the admin port [MQTT_ADMIN_TLS_KEY]
+      --admin-tls-client-ca <FILE>  PEM CA bundle; enables mutual TLS [MQTT_ADMIN_TLS_CLIENT_CA]
+      --admin-token <TOKEN>         Bearer token for /metrics and /mcp [MQTT_ADMIN_TOKEN]
+Authentication & authorization:
+      --password-file <FILE>        Username/password credentials [MQTT_PASSWORD_FILE]
+      --allow-anonymous [<BOOL>]    Allow credential-less clients [MQTT_ALLOW_ANONYMOUS]
+      --acl-file <FILE>             JSON ACL policy per identity [MQTT_ACL_FILE]
+      --hash-password [<USERNAME>]  Print a credential line (password from stdin) and exit
+Storage & limits:
+      --db-path <FILE>              SQLite database file [MQTT_DB_PATH]
+      --max-packet-size <BYTES>     Maximum accepted packet size [MQTT_MAX_PACKET_SIZE]
+      --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
+      --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
+      --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
+      --sys-interval <SECS>         $SYS/broker status refresh interval, 0=disable [MQTT_SYS_INTERVAL]
+Protocol capabilities (advertised in CONNACK):
+      --maximum-qos <0|1|2>         Highest QoS supported [MQTT_MAXIMUM_QOS]
+      --retain-available [<BOOL>]   Retained messages supported [MQTT_RETAIN_AVAILABLE]
+      --topic-alias-maximum <N>     Topic Alias Maximum [MQTT_TOPIC_ALIAS_MAXIMUM]
+      --server-keep-alive <SECS>    Override client Keep Alive [MQTT_SERVER_KEEP_ALIVE]
 ```
 
-Flags accept either `--flag value` or `--flag=value`.
+Help, usage errors and `--version` are generated by [`clap`](https://docs.rs/clap),
+so the list above is abridged — run `--help` for the authoritative text with
+default values.
+
+Flags accept either `--flag value` or `--flag=value`. The two boolean flags
+take `true`/`false` (also `1`/`0`, `yes`/`no`, `on`/`off`), or may be passed
+bare — `--allow-anonymous` alone means `true`.
 
 ## Admin, metrics & MCP (separate HTTP port)
 
