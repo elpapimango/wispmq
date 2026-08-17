@@ -29,8 +29,10 @@ async fn send<W: AsyncWrite + Unpin>(
     metrics: &Metrics,
 ) -> Result<()> {
     let n = write_packet(wr, packet, version).await?;
-    Metrics::inc(&metrics.packets_sent);
-    Metrics::add(&metrics.bytes_sent, n as u64);
+    metrics.record_sent(packet.packet_type(), n);
+    if let Packet::Publish(p) = packet {
+        Metrics::add(&metrics.publish_bytes_sent, p.payload.len() as u64);
+    }
     Ok(())
 }
 
@@ -53,6 +55,7 @@ pub async fn run(broker: Broker) -> Result<()> {
 
     loop {
         let (stream, peer) = listener.accept().await?;
+        Metrics::inc(broker.metrics().socket_connections_ref());
         let broker = broker.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
@@ -103,6 +106,7 @@ pub async fn run_ws(broker: Broker) -> Result<()> {
 
     loop {
         let (stream, peer) = listener.accept().await?;
+        Metrics::inc(broker.metrics().socket_connections_ref());
         let broker = broker.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
@@ -163,8 +167,7 @@ where
     .await
     {
         Ok(Ok(ReadOutcome::Packet(p, n))) => {
-            Metrics::inc(&metrics.packets_received);
-            Metrics::add(&metrics.bytes_received, n as u64);
+            metrics.record_received(p.packet_type(), n);
             p
         }
         Ok(Ok(ReadOutcome::Eof)) => return Ok(()),
@@ -260,8 +263,10 @@ where
             read = timeout(read_timeout, read_packet(&mut rd, max_packet, version)) => {
                 match read {
                     Ok(Ok(ReadOutcome::Packet(packet, n))) => {
-                        Metrics::inc(&metrics.packets_received);
-                        Metrics::add(&metrics.bytes_received, n as u64);
+                        metrics.record_received(packet.packet_type(), n);
+                        if let Packet::Publish(p) = &packet {
+                            Metrics::add(&metrics.publish_bytes_received, p.payload.len() as u64);
+                        }
                         tracing::trace!("{client_id:?} -> {}", packet.name());
                         match broker.handle_packet(&client_id, epoch, packet) {
                             Action::Continue => {}

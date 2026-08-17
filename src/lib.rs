@@ -25,6 +25,7 @@ pub mod metrics;
 pub mod packet;
 pub mod server;
 pub mod storage;
+pub mod sysinfo;
 pub mod tls;
 pub mod topic;
 pub mod types;

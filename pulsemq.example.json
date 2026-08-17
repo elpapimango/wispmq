@@ -7,6 +7,7 @@
   "receive_maximum": 64,
   "max_session_expiry": 3600,
   "max_queued_messages": 1000,
+  "sys_interval": 10,
 
   "maximum_qos": 2,
   "retain_available": true,

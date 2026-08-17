@@ -67,20 +67,19 @@ Done since 1.0.0:
   a Will authorization bypass across ACL reload, and the unbounded offline
   queue (`max_queued_messages`). Secrets are wrapped in `config::Secret`.
 - (3) **Config file is JSON** — `serde_json`, `pulsemq.json`, no `yaml-rust2`.
+- (2) **Metrics** — mosquitto-parity broker status on both surfaces:
+  `$SYS/broker/...` retained topics (`sysinfo.rs`, `sys_interval`) and
+  Prometheus series, incl. per-control-packet counters. `load/*` moving
+  averages were deliberately skipped — use `rate()`.
 
 Remaining, in order:
 
-2. **More metrics** — mosquitto-parity broker status, exposed both as
-   `$SYS/broker/...` retained MQTT topics and Prometheus series. Note
-   `publish_dropped` already exists (added by 5B) — extend, don't duplicate.
 4. **`clap` for CLI parsing** (replaces the hand-rolled `apply_args` + `HELP`).
 5C. **Refactor/optimize** — split `broker/mod.rs` (1.3k lines); `topic::matches`
    allocates two `Vec`s per call on the routing hot path. Measure before adding
    a topic trie. `config.rs` shrank with the JSON move, so it is less urgent.
 6. **Telemetry/log export** to Datadog/Splunk/OTLP — OTLP first, feature-gated.
-   Reuse item 2's counters rather than building a parallel set.
-
-Items 2 and 4 both touch `config.rs`, so do them one at a time.
+   Reuse the existing `Snapshot` rather than building a parallel counter set.
 
 ## Commands
 
@@ -119,7 +118,9 @@ before changing it.
 - `acl` — per-identity publish/subscribe authorization (JSON policy)
 - `bridge` — broker-to-broker forwarding: outbound MQTT client per remote,
   reconnect+backoff, QoS 0/1/2 both ways, loop prevention via `no_local`
-- `metrics` — atomic counters + Prometheus/JSON snapshot
+- `metrics` — atomic counters + gauges; one `Snapshot` rendered two ways
+  (`to_prometheus`, `to_sys_topics`) so the surfaces cannot disagree
+- `sysinfo` — periodic `$SYS/broker/...` publisher (retained, `sys_interval`)
 - `admin` — HTTP server: `/health`, Prometheus `/metrics`, MCP `/mcp`
 - `config` — layered configuration (see below)
 
@@ -142,6 +143,22 @@ Plain TCP, TLS, mutual TLS (all on `--listen-addr`), plus WebSockets and
 WebSockets-over-TLS (on `--ws-listen-addr`). Both ports can run at once and share
 the session/routing core. Client-cert CN becomes the authenticated identity for
 ACLs on any TLS transport.
+
+### Metrics and `$SYS`
+
+Statistics are collected **once** into `metrics::Snapshot` and rendered
+**twice**: `to_prometheus()` for `/metrics` and `to_sys_topics()` for the
+`$SYS/broker/...` MQTT topics published by `sysinfo::run`. When adding a
+statistic, add it to `Snapshot` and to *both* renderers — `tests/sysinfo.rs`
+asserts the two agree. Counters live in `metrics::Metrics` (atomics, incremented
+on the hot path via `record_received`/`record_sent`); gauges are computed under
+the lock in `Broker::snapshot()`.
+
+`$SYS` invariants, all covered by tests: `#`/`+` never match `$SYS` (§4.7.2, so
+ordinary subscribers are unaffected); clients cannot publish under `$SYS`
+(refused `0x90`); values are retained **in memory only**, never persisted; and
+`$SYS` is excluded from `retained_messages`/`retained_bytes`/`list_retained` so
+enabling it does not silently inflate pre-existing gauges.
 
 ### Protocol versions
 

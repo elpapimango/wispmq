@@ -161,6 +161,7 @@ below rather than inline in the example file. A full file looks like:
   "receive_maximum": 64,
   "max_session_expiry": 3600,
   "max_queued_messages": 1000,
+  "sys_interval": 10,
 
   "maximum_qos": 2,
   "retain_available": true,
@@ -213,6 +214,7 @@ STORAGE & LIMITS:
     --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
     --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
     --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
+    --sys-interval <SECS>         $SYS/broker status refresh interval, 0=disable [MQTT_SYS_INTERVAL]
 PROTOCOL CAPABILITIES:
     --maximum-qos <0|1|2>         Highest QoS supported [MQTT_MAXIMUM_QOS]
     --retain-available <BOOL>     Retained messages supported [MQTT_RETAIN_AVAILABLE]
@@ -260,18 +262,90 @@ Since the token travels in plaintext, terminate TLS in front of the admin port
 curl http://127.0.0.1:9001/health
 ```
 
+Broker statistics are available **two ways** from the same source, so the
+numbers always agree: scraped by Prometheus on the admin port, and published
+into the MQTT topic space under `$SYS/broker/...` (see below).
+
 ### Prometheus
 
-Point a scraper at `http://127.0.0.1:9001/metrics`. Exposed series:
+Point a scraper at `http://127.0.0.1:9001/metrics`.
 
-- Counters: `mqtt_connections_total`, `mqtt_packets_received_total`,
-  `mqtt_packets_sent_total`, `mqtt_bytes_received_total`,
-  `mqtt_bytes_sent_total`, `mqtt_publish_received_total`,
-  `mqtt_publish_delivered_total`, `mqtt_bridge_forwarded_out_total`,
-  `mqtt_bridge_forwarded_in_total`.
-- Gauges: `mqtt_clients_connected`, `mqtt_sessions_total`,
-  `mqtt_retained_messages`, `mqtt_subscriptions_total`,
-  `mqtt_bridges_connected`.
+**Traffic counters** — `mqtt_connections_total`,
+`mqtt_socket_connections_total` (sockets accepted, including those that never
+sent CONNECT), `mqtt_packets_received_total`, `mqtt_packets_sent_total`,
+`mqtt_messages_received_total`, `mqtt_messages_sent_total` (aliases of the
+packet counters, for mosquitto parity), `mqtt_bytes_received_total`,
+`mqtt_bytes_sent_total`.
+
+**PUBLISH counters** — `mqtt_publish_received_total`,
+`mqtt_publish_sent_total`, `mqtt_publish_delivered_total`,
+`mqtt_publish_dropped_total` (messages discarded because an offline session hit
+`max_queued_messages`), `mqtt_publish_bytes_received_total`,
+`mqtt_publish_bytes_sent_total` (payload bytes, excluding framing).
+
+**Per-control-packet counters** — `mqtt_<packet>_received_total` and
+`mqtt_<packet>_sent_total` for each of `connect`, `connack`, `publish`,
+`puback`, `pubrec`, `pubrel`, `pubcomp`, `subscribe`, `suback`, `unsubscribe`,
+`unsuback`, `pingreq`, `pingresp`, `disconnect`, `auth`.
+
+**Client gauges** — `mqtt_clients_connected`, `mqtt_clients_disconnected`
+(offline persistent sessions), `mqtt_clients_total`, `mqtt_clients_maximum`
+(high-water mark), `mqtt_clients_expired_total`, `mqtt_sessions_total`.
+
+**Storage / subscription gauges** — `mqtt_retained_messages`,
+`mqtt_retained_bytes`, `mqtt_subscriptions_total`,
+`mqtt_shared_subscriptions_count`, `mqtt_store_messages_count`,
+`mqtt_store_messages_bytes`, `mqtt_packet_out_count`, `mqtt_packet_out_bytes`
+(queued for delivery — a backpressure signal).
+
+**Other** — `mqtt_bridge_forwarded_out_total`,
+`mqtt_bridge_forwarded_in_total`, `mqtt_bridges_connected`,
+`mqtt_uptime_seconds`, and `mqtt_build_info{version="..."}`.
+
+`$SYS` status topics are excluded from `mqtt_retained_messages` /
+`mqtt_retained_bytes` and from `list_retained`: they are broker-owned
+bookkeeping, and counting them would add ~50 to those gauges the moment $SYS is
+enabled.
+
+### `$SYS/broker` status topics
+
+The same statistics are published as **retained** messages under
+`$SYS/broker/...`, refreshed every `sys_interval` seconds (default 10; set
+`sys_interval` to `0` to disable). The hierarchy follows mosquitto's, so
+existing habits and dashboards carry over:
+
+```bash
+mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
+```
+
+```
+$SYS/broker/version PulseMQ 1.0.0
+$SYS/broker/uptime 15 seconds
+$SYS/broker/clients/connected 1
+$SYS/broker/clients/total 1
+$SYS/broker/messages/received 2
+$SYS/broker/publish/messages/received 2
+$SYS/broker/publish/bytes/received 8
+$SYS/broker/mqtt/publish/received 2
+$SYS/broker/store/messages/count 1
+...
+```
+
+Two properties worth knowing:
+
+- **A `#` or `+` subscription does not match `$SYS`** (§4.7.2), so ordinary
+  wildcard subscribers are never flooded with broker statistics — you must
+  subscribe to `$SYS/#` explicitly.
+- **Clients cannot publish under `$SYS`.** The broker is the only writer, so
+  the values cannot be forged; an attempt is refused with `0x90` Topic Name
+  invalid.
+
+Values are retained in memory only, never written to SQLite — they are
+recomputed every interval, so persisting them would mean a write storm on a
+timer and stale statistics after a restart.
+
+`load/*` moving averages (mosquitto's 1/5/15-minute figures) are not
+implemented; use Prometheus `rate()` over the counters instead.
 
 ```yaml
 # prometheus.yml
@@ -334,6 +408,7 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_RECEIVE_MAXIMUM` | `64` | Server Receive Maximum |
 | `MQTT_MAX_SESSION_EXPIRY` | `3600` | Cap on Session Expiry Interval (s) |
 | `MQTT_MAX_QUEUED_MESSAGES` | `1000` | Max messages queued per offline session; `0` = unlimited |
+| `MQTT_SYS_INTERVAL` | `10` | `$SYS/broker` status refresh interval (s); `0` disables |
 | `MQTT_MAXIMUM_QOS` | `2` | Highest QoS the server supports (0/1/2) |
 | `MQTT_RETAIN_AVAILABLE` | `true` | Whether retained messages are supported |
 | `MQTT_TOPIC_ALIAS_MAXIMUM` | `16` | Topic Alias Maximum granted to clients |

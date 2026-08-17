@@ -78,7 +78,30 @@ bridges:
 
 ---
 
-## 2. More metrics — mosquitto-parity broker status ($SYS + Prometheus)
+## 2. More metrics — mosquitto-parity broker status ($SYS + Prometheus) — ✅ DONE
+
+Implemented. `metrics::Snapshot` is collected once and rendered twice —
+`to_prometheus()` and `to_sys_topics()` — with `tests/sysinfo.rs` asserting the
+two agree, so the surfaces cannot drift. Added per-control-packet
+received/sent counters (a `[AtomicU64; 16]` indexed by packet type), publish
+payload bytes, socket count, `clients_maximum`/`clients_expired`, uptime and
+build version, plus the client/store/subscription gauges computed in
+`Broker::snapshot()`. `sysinfo::run` publishes `$SYS/broker/...` retained every
+`sys_interval` seconds (default 10, `0` disables), and client PUBLISH under
+`$SYS` is refused with `0x90`.
+
+Two decisions worth recording:
+- **`$SYS` values are retained in memory only, never persisted.** They are
+  recomputed every interval, so writing ~60 rows to SQLite on a timer would be
+  a write storm and would resurrect stale statistics after a restart.
+- **`$SYS` is excluded from `retained_messages`/`retained_bytes` and from
+  `list_retained`.** They share the retained map (that is how late subscribers
+  get them), but counting them would have added ~50 to an existing gauge the
+  moment $SYS was switched on, silently changing what it measured.
+
+The `load/*` moving averages were deliberately **not** implemented — see the
+second-phase note below; `rate()` covers it for Prometheus users. Original
+notes follow.
 
 Bring broker statistics up to **mosquitto parity**, exposed **two ways**:
 

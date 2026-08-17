@@ -32,6 +32,10 @@ use crate::types::{QoS, ReasonCode};
 /// certificate (no mutual TLS).
 const ANONYMOUS: &str = "anonymous";
 
+/// Root of the broker-owned status hierarchy. Clients may subscribe here but
+/// never publish; the broker is the only writer (`Broker::publish_sys`).
+pub const SYS_PREFIX: &str = "$SYS/";
+
 /// Result of handling an inbound packet, telling the connection task what to do.
 pub enum Action {
     /// Keep serving the connection.
@@ -64,6 +68,8 @@ struct Inner {
     storage: Storage,
     state: Mutex<State>,
     metrics: Metrics,
+    /// Process start, for `$SYS/broker/uptime` and `mqtt_uptime_seconds`.
+    started_at: std::time::Instant,
     /// Authorization policy, swappable at runtime (reloaded on SIGHUP). Readers
     /// take a cheap snapshot of the `Arc`; a reload replaces it atomically.
     acl: RwLock<Arc<Acl>>,
@@ -145,6 +151,7 @@ impl Broker {
                     auto_id_counter: 1,
                 }),
                 metrics: Metrics::default(),
+                started_at: std::time::Instant::now(),
                 acl: RwLock::new(Arc::new(acl)),
                 auth,
             }),
@@ -247,15 +254,58 @@ impl Broker {
     // ---------------------------------------------------------------------
 
     /// Combine cumulative counters with live gauges computed under the lock.
+    ///
+    /// Everything derived from `State` is gathered in one pass so the lock is
+    /// held once and briefly: this runs on every Prometheus scrape and on every
+    /// `$SYS` publish tick, both of which are on a timer rather than the
+    /// network path, but it walks all sessions and must not become a stall.
     pub fn snapshot(&self) -> Snapshot {
         let m = &self.inner.metrics;
         let st = self.lock();
-        let clients_connected = st.sessions.values().filter(|s| s.is_online()).count() as u64;
-        let subscriptions_total = st
-            .sessions
-            .values()
-            .map(|s| s.subscriptions.len())
-            .sum::<usize>() as u64;
+
+        let mut clients_connected = 0u64;
+        let mut clients_disconnected = 0u64;
+        let mut subscriptions_total = 0u64;
+        let mut shared_subscriptions_count = 0u64;
+        let mut packet_out_count = 0u64;
+        let mut packet_out_bytes = 0u64;
+
+        for s in st.sessions.values() {
+            if s.is_online() {
+                clients_connected += 1;
+            } else {
+                clients_disconnected += 1;
+            }
+            subscriptions_total += s.subscriptions.len() as u64;
+            shared_subscriptions_count += s
+                .subscriptions
+                .iter()
+                .filter(|x| x.share_name.is_some())
+                .count() as u64;
+            // Queued plus inflight is what the broker still owes this client.
+            packet_out_count += (s.queue.len() + s.inflight_count()) as u64;
+            packet_out_bytes += s
+                .queue
+                .iter()
+                .map(|p| p.message.payload.len() as u64)
+                .sum::<u64>();
+        }
+
+        // `$SYS` status values live in the same retained map (that is how they
+        // reach late subscribers), but they are broker-owned bookkeeping, not
+        // user data. Counting them would make `retained_messages` jump by ~50
+        // the moment $SYS is enabled and would silently change the meaning of
+        // an existing gauge, so they are excluded here.
+        let mut retained_messages = 0u64;
+        let mut retained_bytes = 0u64;
+        for (topic, msg) in st.retained.iter() {
+            if topic.starts_with(SYS_PREFIX) {
+                continue;
+            }
+            retained_messages += 1;
+            retained_bytes += msg.payload.len() as u64;
+        }
+
         Snapshot {
             connections_total: Metrics::get(&m.connections_total),
             packets_received: Metrics::get(&m.packets_received),
@@ -267,11 +317,29 @@ impl Broker {
             publish_dropped: Metrics::get(&m.publish_dropped),
             bridge_forwarded_out: Metrics::get(&m.bridge_forwarded_out),
             bridge_forwarded_in: Metrics::get(&m.bridge_forwarded_in),
+            publish_bytes_received: Metrics::get(&m.publish_bytes_received),
+            publish_bytes_sent: Metrics::get(&m.publish_bytes_sent),
+            socket_connections: Metrics::get(&m.socket_connections),
+            clients_expired: Metrics::get(&m.clients_expired),
+            packet_received: Metrics::read_array_pub(&m.packet_received),
+            packet_sent: Metrics::read_array_pub(&m.packet_sent),
             clients_connected,
+            clients_disconnected,
+            clients_total: st.sessions.len() as u64,
+            clients_maximum: Metrics::get(&m.clients_maximum),
             sessions_total: st.sessions.len() as u64,
-            retained_messages: st.retained.len() as u64,
+            retained_messages,
+            retained_bytes,
             subscriptions_total,
+            shared_subscriptions_count,
             bridges_connected: Metrics::get(&m.bridges_connected),
+            // "Store" is retained plus everything still queued for a client.
+            store_messages_count: retained_messages + packet_out_count,
+            store_messages_bytes: retained_bytes + packet_out_bytes,
+            packet_out_count,
+            packet_out_bytes,
+            uptime_seconds: self.inner.started_at.elapsed().as_secs(),
+            version: crate::config::VERSION,
         }
     }
 
@@ -301,7 +369,9 @@ impl Broker {
         let mut out: Vec<RetainedInfo> = st
             .retained
             .iter()
-            .filter(|(_, m)| !m.is_expired())
+            // Skip `$SYS` for the same reason the gauges do: it is broker
+            // status, and ~50 of them would bury the user's own retained data.
+            .filter(|(topic, m)| !m.is_expired() && !topic.starts_with(SYS_PREFIX))
             .map(|(topic, m)| RetainedInfo {
                 topic: topic.clone(),
                 payload_size: m.payload.len(),
@@ -393,6 +463,36 @@ impl Broker {
             }
         }
         self.route(&mut st, Some(from), &message);
+    }
+
+    /// Publish a batch of `$SYS/broker/...` broker-status messages.
+    ///
+    /// Retained **in memory only**: subscribers that arrive between ticks get
+    /// the last value immediately, but these are recomputed every
+    /// `sys_interval` seconds, so persisting them would mean a SQLite write
+    /// storm on a timer and stale statistics resurrected at the next startup.
+    ///
+    /// The whole batch is published under one lock acquisition — there are
+    /// ~60 topics per tick and taking the broker lock once each would be
+    /// needless contention with the network path.
+    pub fn publish_sys(&self, entries: &[(String, String)]) {
+        let mut st = self.lock();
+        for (topic, payload) in entries {
+            let message = Message {
+                topic: topic.clone(),
+                payload: payload.as_bytes().to_vec(),
+                qos: QoS::AtMostOnce,
+                retain: true,
+                payload_format_indicator: Some(1), // UTF-8 text
+                content_type: None,
+                response_topic: None,
+                correlation_data: None,
+                user_properties: Vec::new(),
+                expires_at: None,
+            };
+            st.retained.insert(topic.clone(), message.clone());
+            self.route(&mut st, None, &message);
+        }
     }
 
     /// Remove a bridge session on shutdown, if the epoch still matches.
@@ -572,6 +672,8 @@ impl Broker {
         }
 
         Metrics::inc(&self.inner.metrics.connections_total);
+        let connected_now = st.sessions.values().filter(|s| s.is_online()).count() as u64;
+        self.inner.metrics.observe_clients_connected(connected_now);
 
         Ok(Accepted {
             client_id,
@@ -660,6 +762,19 @@ impl Broker {
         }
 
         if !topic::valid_topic_name(&publish.topic) {
+            return Action::ServerDisconnect(ReasonCode::TopicNameInvalid);
+        }
+
+        // `$SYS` is broker-owned status (see `publish_sys`). A client writing
+        // there could forge broker statistics for every $SYS subscriber, so it
+        // is refused regardless of ACL. Checked after alias resolution so an
+        // alias cannot be used to smuggle the topic in.
+        if publish.topic.starts_with(SYS_PREFIX) {
+            tracing::debug!(
+                client_id,
+                topic = %publish.topic,
+                "refusing client PUBLISH to the broker-owned $SYS hierarchy"
+            );
             return Action::ServerDisconnect(ReasonCode::TopicNameInvalid);
         }
 
@@ -1062,8 +1177,14 @@ impl Broker {
             let mut st = self.lock();
             if let Some(s) = st.sessions.get(client_id) {
                 if s.epoch == epoch && !s.is_online() {
+                    let persistent = s.persistent;
                     st.sessions.remove(client_id);
                     self.inner.storage.delete_session(client_id.to_string());
+                    // Only a durable session "expires"; a clean-start session
+                    // ending is the normal case, not an expiry event.
+                    if persistent {
+                        Metrics::inc(&self.inner.metrics.clients_expired);
+                    }
                 }
             }
         } else {
@@ -1133,8 +1254,12 @@ impl Broker {
             let mut st = broker.lock();
             if let Some(s) = st.sessions.get(&client_id) {
                 if s.epoch == epoch && !s.is_online() {
+                    let persistent = s.persistent;
                     st.sessions.remove(&client_id);
                     broker.inner.storage.delete_session(client_id.clone());
+                    if persistent {
+                        Metrics::inc(&broker.inner.metrics.clients_expired);
+                    }
                 }
             }
         });

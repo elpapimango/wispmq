@@ -31,6 +31,7 @@ const KNOWN_KEYS: &[&str] = &[
     "receive_maximum",
     "max_session_expiry",
     "max_queued_messages",
+    "sys_interval",
     "maximum_qos",
     "retain_available",
     "topic_alias_maximum",
@@ -137,6 +138,9 @@ pub struct Config {
     /// the whole session-expiry window, which is a memory-exhaustion DoS on a
     /// small host. `0` means unlimited (the pre-1.0 behaviour).
     pub max_queued_messages: u32,
+    /// How often (seconds) to refresh the `$SYS/broker/...` status topics.
+    /// `0` disables $SYS publishing entirely.
+    pub sys_interval: u32,
     /// Broker-to-broker forwarding bridges (config-file only). See `bridge`.
     pub bridges: Vec<crate::bridge::BridgeConfig>,
     /// Path of the JSON config file that was loaded, if any (informational).
@@ -171,6 +175,7 @@ impl Default for Config {
             server_keep_alive: None,
             max_session_expiry: 3600,
             max_queued_messages: 1000,
+            sys_interval: 10,
             bridges: Vec::new(),
             config_file: None,
         }
@@ -253,6 +258,11 @@ impl Config {
         if let Some(v) = non_empty_env("MQTT_MAX_QUEUED_MESSAGES") {
             if let Ok(n) = v.parse() {
                 self.max_queued_messages = n;
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_SYS_INTERVAL") {
+            if let Ok(n) = v.parse() {
+                self.sys_interval = n;
             }
         }
         if let Some(q) = non_empty_env("MQTT_MAXIMUM_QOS")
@@ -426,6 +436,9 @@ impl Config {
         }
         if let Some(n) = j_u32(doc, "max_queued_messages", source)? {
             self.max_queued_messages = n;
+        }
+        if let Some(n) = j_u32(doc, "sys_interval", source)? {
+            self.sys_interval = n;
         }
         if let Some(n) = j_i64(doc, "receive_maximum", source)? {
             self.receive_maximum = u16::try_from(n).map_err(|_| {
@@ -629,6 +642,7 @@ STORAGE & LIMITS:
                                   (default 64)
     --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
     --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
+    --sys-interval <SECS>         $SYS/broker status refresh interval, 0=disable [MQTT_SYS_INTERVAL]
                                   (default 3600)
 
 PROTOCOL CAPABILITIES (advertised in CONNACK):
@@ -715,6 +729,9 @@ impl Config {
                 }
                 "--max-queued-messages" => {
                     self.max_queued_messages = parse_num(&value(&mut i)?, "--max-queued-messages")?
+                }
+                "--sys-interval" => {
+                    self.sys_interval = parse_num(&value(&mut i)?, "--sys-interval")?
                 }
                 "--maximum-qos" => {
                     self.maximum_qos = parse_qos_arg(&value(&mut i)?, "--maximum-qos")?

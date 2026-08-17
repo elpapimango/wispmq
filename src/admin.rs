@@ -401,6 +401,21 @@ fn call_tool(broker: &Broker, params: Option<&Value>) -> std::result::Result<Val
                 "retained_messages": s.retained_messages,
                 "subscriptions_total": s.subscriptions_total,
                 "bridges_connected": s.bridges_connected,
+                "publish_bytes_received": s.publish_bytes_received,
+                "publish_bytes_sent": s.publish_bytes_sent,
+                "socket_connections": s.socket_connections,
+                "clients_disconnected": s.clients_disconnected,
+                "clients_total": s.clients_total,
+                "clients_maximum": s.clients_maximum,
+                "clients_expired": s.clients_expired,
+                "retained_bytes": s.retained_bytes,
+                "shared_subscriptions_count": s.shared_subscriptions_count,
+                "store_messages_count": s.store_messages_count,
+                "store_messages_bytes": s.store_messages_bytes,
+                "packet_out_count": s.packet_out_count,
+                "packet_out_bytes": s.packet_out_bytes,
+                "uptime_seconds": s.uptime_seconds,
+                "version": s.version,
             })
         }
         "list_clients" => {
