@@ -16,7 +16,7 @@ pub mod admin;
 pub mod auth;
 pub mod bridge;
 pub mod broker;
-pub mod cli;
+pub(crate) mod cli;
 pub mod codec;
 pub mod config;
 pub mod error;

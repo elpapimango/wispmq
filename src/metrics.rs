@@ -137,12 +137,12 @@ impl Metrics {
     }
 
     /// Borrow the accepted-sockets counter (used from the accept loops).
-    pub fn socket_connections_ref(&self) -> &AtomicU64 {
+    pub(crate) fn socket_connections_ref(&self) -> &AtomicU64 {
         &self.socket_connections
     }
 
     /// Read the per-packet array into a plain array for a `Snapshot`.
-    pub fn read_array_pub(src: &[AtomicU64; PACKET_KINDS]) -> [u64; PACKET_KINDS] {
+    pub(crate) fn read_array(src: &[AtomicU64; PACKET_KINDS]) -> [u64; PACKET_KINDS] {
         let mut out = [0u64; PACKET_KINDS];
         for (slot, counter) in out.iter_mut().zip(src.iter()) {
             *slot = Self::get(counter);

@@ -43,7 +43,6 @@ impl Broker {
                 qos: QoS::AtMostOnce,
                 no_local,
                 retain_as_published: true,
-                retain_handling: RetainHandling::DoNotSend,
                 subscription_identifier: None,
             });
         }

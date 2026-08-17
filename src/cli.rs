@@ -33,7 +33,7 @@ use crate::types::QoS;
                   command-line flags.\n\nFlags accept either `--flag value` or `--flag=value`. \
                   Logging verbosity is controlled by RUST_LOG (default: info)."
 )]
-pub struct Cli {
+pub(crate) struct Cli {
     /// Load this JSON config file [MQTT_CONFIG_FILE]. If omitted, pulsemq.json
     /// in the working directory is used when present.
     #[arg(long, value_name = "FILE", help_heading = "Config file")]
@@ -208,7 +208,7 @@ impl Cli {
     ///
     /// `--config` and `--hash-password` are absent here on purpose: both are
     /// acted on by `Config::load` before the other layers are read.
-    pub fn apply(&self, cfg: &mut Config) {
+    pub(crate) fn apply(&self, cfg: &mut Config) {
         if let Some(v) = self.listen_addr {
             cfg.listen_addr = v;
         }

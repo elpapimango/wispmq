@@ -38,7 +38,10 @@ mod session;
 mod stats;
 mod subscribe;
 
-pub use session::{OutTx, Outgoing, Session};
+// `OutTx`/`Outgoing` are part of the bridge-registration signature, so they
+// are public. `Session` is an internal type: re-exported only inside the crate.
+pub(crate) use session::Session;
+pub use session::{OutTx, Outgoing};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -162,7 +165,6 @@ impl Broker {
                     qos: sub.qos,
                     no_local: sub.no_local,
                     retain_as_published: sub.retain_as_published,
-                    retain_handling: sub.retain_handling,
                     subscription_identifier: sub.subscription_identifier,
                 });
             }

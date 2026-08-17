@@ -59,7 +59,6 @@ impl Broker {
                 qos: granted,
                 no_local: f.no_local,
                 retain_as_published: f.retain_as_published,
-                retain_handling: f.retain_handling,
                 subscription_identifier: sub_id,
             };
 

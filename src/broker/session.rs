@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::message::Message;
-use crate::packet::{Publish, RetainHandling};
+use crate::packet::Publish;
 use crate::types::QoS;
 
 /// A message waiting in a session's offline queue (or to be sent on resume).
@@ -28,7 +28,6 @@ pub struct Subscription {
     pub qos: QoS,
     pub no_local: bool,
     pub retain_as_published: bool,
-    pub retain_handling: RetainHandling,
     pub subscription_identifier: Option<u32>,
 }
 
@@ -172,16 +171,5 @@ impl Session {
     /// (subscriptions, inflight). Called when the client disconnects.
     pub fn go_offline(&mut self) {
         self.out = None;
-    }
-
-    /// Clear everything a Clean Start requires discarding (4.1).
-    pub fn clear(&mut self) {
-        self.subscriptions.clear();
-        self.awaiting_puback.clear();
-        self.awaiting_pubrec.clear();
-        self.awaiting_pubcomp.clear();
-        self.queue.clear();
-        self.inbound_qos2.clear();
-        self.next_packet_id = 1;
     }
 }
