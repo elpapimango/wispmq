@@ -18,13 +18,14 @@ project.
 
 ## Project history & status
 
-Current status: **v1.0.0 released** (tag `v1.0.0`, GitHub Release, and
-`ghcr.io/elpapimango/pulsemq:1.0.0`), plus unreleased post-1.0.0 work on `main`
-(forwarding, the 5A/5B audit, JSON config, `$SYS` metrics — see "Done since
-1.0.0" below). `main` is therefore ahead of the `1.0.0` tag and image; the
-crate version is still `1.0.0`, so **bump it when cutting the next release**.
-CI (`ci.yml`) and image builds (`docker.yml`) are green. `git log` has the
-detail — this is the map.
+Current status: the crate version is **1.0.1**, carrying the post-1.0.0 work on
+`main` (forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, clap CLI — see
+"Done since 1.0.0" below). The last *tagged* release is still **v1.0.0** (tag
+`v1.0.0`, GitHub Release, `ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is
+ahead of both the tag and that image. **1.0.1 is not tagged or released yet** —
+cutting it means pushing a `v1.0.1` tag (which triggers `docker.yml`) and
+creating the GitHub Release. CI (`ci.yml`) and image builds (`docker.yml`) are
+green. `git log` has the detail — this is the map.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
