@@ -1,6 +1,6 @@
 //! MQTT v5.0 broker executable.
 //!
-//! Configuration is layered: a YAML config file, then environment variables,
+//! Configuration is layered: a JSON config file, then environment variables,
 //! then command-line flags (see `config::Config`). State is persisted to
 //! SQLite and reloaded on startup.
 

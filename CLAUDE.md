@@ -12,7 +12,7 @@ TLS, WebSockets, WebSockets-over-TLS. Repo:
 https://github.com/elpapimango/pulsemq
 
 Display name is **PulseMQ**; the identifier everywhere (crate, binary, image,
-repo, default `pulsemq.yaml`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
+repo, default `pulsemq.json`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
 metric names are intentionally kept — they describe the protocol, not the
 project.
 
@@ -36,7 +36,7 @@ Milestones, in order:
    with a client-CA trust store.
 6. **Cert-CN identity + per-identity ACLs**; ACL **hot-reload on SIGHUP** that
    revokes live subscriptions and disconnects affected clients (`0x87`).
-7. **CLI** (`--help`) with a flag for every env option; then a **YAML config
+7. **CLI** (`--help`) with a flag for every env option; then a **config
    file** (precedence: file < env < CLI); then exposed the remaining
    capability knobs (`maximum_qos`, `retain_available`, `topic_alias_maximum`,
    `server_keep_alive`).
@@ -56,19 +56,31 @@ No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
 WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
 SSE is not implemented (`GET /mcp` → 405).
 
-**Planned work is in [`TODO.md`](TODO.md)** — pick the top item. Item (1),
-forwarding (broker-to-broker bridge, `bridge.rs`), is done. The rest, in order:
+**Planned work is in [`TODO.md`](TODO.md)** — pick the top item.
+
+Done since 1.0.0:
+- (1) **Forwarding** — broker-to-broker bridge (`bridge.rs`).
+- (5A) **No-panic audit** of the untrusted-input path. `tests/malformed.rs`
+  proves `Packet::decode` never panics on hostile bytes across all three
+  versions; keep it passing when touching the codec.
+- (5B) **Security review** — fixed a PBKDF2 username-enumeration timing leak,
+  a Will authorization bypass across ACL reload, and the unbounded offline
+  queue (`max_queued_messages`). Secrets are wrapped in `config::Secret`.
+- (3) **Config file is JSON** — `serde_json`, `pulsemq.json`, no `yaml-rust2`.
+
+Remaining, in order:
 
 2. **More metrics** — mosquitto-parity broker status, exposed both as
-   `$SYS/broker/...` retained MQTT topics and Prometheus series.
-3. **Config file YAML → JSON** (drop `yaml-rust2`, `pulsemq.json`).
+   `$SYS/broker/...` retained MQTT topics and Prometheus series. Note
+   `publish_dropped` already exists (added by 5B) — extend, don't duplicate.
 4. **`clap` for CLI parsing** (replaces the hand-rolled `apply_args` + `HELP`).
-5. **Full code audit** — error handling/no-panic sweep, security review, then
-   refactor/optimize (`broker/mod.rs` and `config.rs` are the big modules).
+5C. **Refactor/optimize** — split `broker/mod.rs` (1.3k lines); `topic::matches`
+   allocates two `Vec`s per call on the routing hot path. Measure before adding
+   a topic trie. `config.rs` shrank with the JSON move, so it is less urgent.
 6. **Telemetry/log export** to Datadog/Splunk/OTLP — OTLP first, feature-gated.
+   Reuse item 2's counters rather than building a parallel set.
 
-Note that items 2, 3, and 4 all touch `config.rs`, so do them one at a time
-rather than in parallel. Item 5 is worth doing before or alongside 6.
+Items 2 and 4 both touch `config.rs`, so do them one at a time.
 
 ## Commands
 
@@ -151,12 +163,12 @@ ACL (`--acl-file`), which is `RwLock<Arc<Acl>>` and hot-reloaded on SIGHUP
 
 ## Configuration
 
-Precedence, lowest to highest: **defaults < YAML config file < env vars < CLI
-flags**. Entry point is `Config::load()`. `pulsemq.yaml`/`.yml` in the cwd is
+Precedence, lowest to highest: **defaults < JSON config file < env vars < CLI
+flags**. Entry point is `Config::load()`. `pulsemq.json` in the cwd is
 auto-loaded; `--config` / `MQTT_CONFIG_FILE` overrides. When adding a new option,
 wire it in **all** places: the `Config` struct + `Default`, `apply_env`,
-`apply_args` (+ `HELP` text), `apply_yaml_str` (+ `KNOWN_YAML_KEYS`), the README
-tables, and `pulsemq.example.yaml`. There are unit tests in `config` covering
+`apply_args` (+ `HELP` text), `apply_json_str` (+ `KNOWN_KEYS`), the README
+tables, and `pulsemq.example.json`. There are unit tests in `config` covering
 each layer — extend them.
 
 ## Tests
@@ -225,10 +237,10 @@ Notes for picking up in a new session/machine:
 
 - Keep the dependency surface small and justified; prefer std + the existing crates.
 - When adding a config option, wire it through Config + Default, `apply_env`,
-  `apply_args` (+ HELP), `apply_yaml_str` (+ `KNOWN_YAML_KEYS`), README, and
-  `pulsemq.example.yaml` — with tests. (See the Configuration checklist.)
+  `apply_args` (+ HELP), `apply_json_str` (+ `KNOWN_KEYS`), README, and
+  `pulsemq.example.json` — with tests. (See the Configuration checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
-- Real `pulsemq.yaml` and `*.db` files are gitignored (may hold secrets/state);
-  the tracked template is `pulsemq.example.yaml`.
+- Real `pulsemq.json` and `*.db` files are gitignored (may hold secrets/state);
+  the tracked template is `pulsemq.example.json`.

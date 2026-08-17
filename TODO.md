@@ -180,7 +180,16 @@ the `load/*` topics are mainly for $SYS parity.
 
 ---
 
-## 3. Switch the config file format from YAML to JSON
+## 3. Switch the config file format from YAML to JSON — ✅ DONE
+
+Implemented: `config.rs` parses with `serde_json` (`apply_json_str`/
+`apply_json_file`, `KNOWN_KEYS`), `bridge::parse_bridges` takes a
+`&serde_json::Value`, the default file is `pulsemq.json`, `yaml-rust2` is gone,
+and the example is `pulsemq.example.json` (a minimal, copy-paste-valid file).
+Per the caveat below we kept **strict JSON** and moved per-option docs to the
+README; a `#`/`//` comment is now a startup error rather than being silently
+ignored, which is covered by a test so anyone porting a commented
+`pulsemq.yaml` is told plainly. Original notes follow.
 
 Replace the YAML config file with **JSON**. Rationale: one config format across
 the project (the ACL policy is already JSON), `serde_json` is already a

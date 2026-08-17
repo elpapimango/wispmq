@@ -19,13 +19,13 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::Instant;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsConnector;
-use yaml_rust2::Yaml;
 
 use crate::broker::{Broker, Outgoing};
 use crate::codec::Properties;
@@ -108,18 +108,18 @@ impl std::fmt::Debug for BridgeConfig {
 }
 
 // -------------------------------------------------------------------------
-// Config parsing (YAML `bridges:` list)
+// Config parsing (JSON `bridges` array)
 // -------------------------------------------------------------------------
 
-/// Parse the optional `bridges:` list from a YAML document.
-pub fn parse_bridges(doc: &Yaml, source: &str) -> Result<Vec<BridgeConfig>> {
+/// Parse the optional `bridges` array from a JSON config document.
+pub fn parse_bridges(doc: &Value, source: &str) -> Result<Vec<BridgeConfig>> {
     let node = &doc["bridges"];
-    if node.is_badvalue() || node.is_null() {
+    if node.is_null() {
         return Ok(Vec::new());
     }
     let list = node
-        .as_vec()
-        .ok_or_else(|| cfg(format!("{source}: 'bridges' must be a list")))?;
+        .as_array()
+        .ok_or_else(|| cfg(format!("{source}: 'bridges' must be an array")))?;
     let mut out = Vec::with_capacity(list.len());
     for (i, b) in list.iter().enumerate() {
         let at = format!("{source}: bridges[{i}]");
@@ -161,10 +161,10 @@ pub fn parse_bridges(doc: &Yaml, source: &str) -> Result<Vec<BridgeConfig>> {
     Ok(out)
 }
 
-fn parse_topics(node: &Yaml, at: &str) -> Result<Vec<BridgeTopic>> {
+fn parse_topics(node: &Value, at: &str) -> Result<Vec<BridgeTopic>> {
     let list = node
-        .as_vec()
-        .ok_or_else(|| cfg(format!("{at}: 'topics' must be a list")))?;
+        .as_array()
+        .ok_or_else(|| cfg(format!("{at}: 'topics' must be an array")))?;
     let mut out = Vec::with_capacity(list.len());
     for (j, t) in list.iter().enumerate() {
         let tat = format!("{at}.topics[{j}]");
@@ -197,14 +197,14 @@ fn cfg(msg: String) -> MqttError {
     MqttError::Config(msg)
 }
 
-fn req_str(node: &Yaml, key: &str, at: &str) -> Result<String> {
+fn req_str(node: &Value, key: &str, at: &str) -> Result<String> {
     node[key]
         .as_str()
         .map(|s| s.to_string())
         .ok_or_else(|| cfg(format!("{at}: missing string '{key}'")))
 }
 
-fn opt_str(node: &Yaml, key: &str) -> Option<String> {
+fn opt_str(node: &Value, key: &str) -> Option<String> {
     node[key].as_str().map(|s| s.to_string())
 }
 

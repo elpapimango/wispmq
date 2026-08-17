@@ -115,13 +115,13 @@ Docker pulls the right variant automatically. It runs as a non-root user, stores
 its SQLite state in the `/data` volume, exposes `1883` (MQTT), `8883` (TLS),
 `8080` (WebSockets) and `9001` (admin), and has a `HEALTHCHECK` against
 `/health`. Configure it with the same environment variables described below
-(mount certs / password / ACL / YAML files into the container, e.g. under
+(mount certs / password / ACL / config files into the container, e.g. under
 `/config`). Build locally with `docker build -t pulsemq .`, or for another
 architecture with `docker buildx build --platform linux/arm64 -t pulsemq .`.
 
 ## Configuration
 
-Every setting can be provided three ways — a **YAML config file**, an
+Every setting can be provided three ways — a **JSON config file**, an
 **environment variable**, or a **command-line flag** — layered in this order of
 increasing precedence:
 
@@ -129,40 +129,49 @@ increasing precedence:
 defaults  <  config file  <  environment variables  <  command-line flags
 ```
 
-The config file is discovered automatically: if `pulsemq.yaml` (or
-`pulsemq.yml`) exists in the working directory it is loaded. A different
-path can be given with `--config <FILE>` or `MQTT_CONFIG_FILE`; an explicitly
-named file that is missing or invalid is a startup error. Unknown keys and
-wrong value types are rejected.
+The config file is discovered automatically: if `pulsemq.json` exists in the
+working directory it is loaded. A different path can be given with
+`--config <FILE>` or `MQTT_CONFIG_FILE`; an explicitly named file that is
+missing or invalid is a startup error. Unknown keys and wrong value types are
+rejected, so a typo fails loudly at startup instead of being ignored.
 
-YAML keys are the option names with underscores (e.g. `listen_addr`). Example
-[`pulsemq.example.yaml`](pulsemq.example.yaml):
+Keys are the option names with underscores (e.g. `listen_addr`) — the same
+names as the environment variables minus the `MQTT_` prefix, and the same as
+the CLI flags with `-` replaced by `_`. A minimal, ready-to-copy file ships as
+[`pulsemq.example.json`](pulsemq.example.json).
 
-```yaml
-listen_addr: "0.0.0.0:1883"
-tls_cert: "certs/server.pem"
-tls_key: "certs/server.key"
-tls_client_ca: "certs/ca.pem"        # enables mutual TLS
+Because JSON has no comment syntax, every option is documented in the table
+below rather than inline in the example file. A full file looks like:
 
-ws_listen_addr: "0.0.0.0:8080"       # MQTT over WebSockets
-# ws_tls_cert / ws_tls_key           # ... over TLS (wss)
+```json
+{
+  "listen_addr": "0.0.0.0:1883",
+  "tls_cert": "certs/server.pem",
+  "tls_key": "certs/server.key",
+  "tls_client_ca": "certs/ca.pem",
 
-admin_addr: "127.0.0.1:9001"
-admin_token: "change-me"             # bearer token for /metrics and /mcp
-acl_path: "acl.json"
+  "ws_listen_addr": "0.0.0.0:8080",
 
-db_path: "mqtt_broker.db"
-max_packet_size: 1048576
-receive_maximum: 64
-max_session_expiry: 3600
-max_queued_messages: 1000          # per offline session; 0 = unlimited
+  "admin_addr": "127.0.0.1:9001",
+  "admin_token": "change-me",
+  "acl_path": "acl.json",
 
-# advertised in CONNACK
-maximum_qos: 2                       # 0, 1, or 2
-retain_available: true
-topic_alias_maximum: 16
-# server_keep_alive: 60              # override the client's Keep Alive
+  "db_path": "mqtt_broker.db",
+  "max_packet_size": 1048576,
+  "receive_maximum": 64,
+  "max_session_expiry": 3600,
+  "max_queued_messages": 1000,
+
+  "maximum_qos": 2,
+  "retain_available": true,
+  "topic_alias_maximum": 16,
+  "server_keep_alive": 60
+}
 ```
+
+`tls_client_ca` enables mutual TLS; `ws_tls_cert`/`ws_tls_key` put the
+WebSocket listener behind TLS (`wss://`); `server_keep_alive` overrides the
+client's Keep Alive. Omit any key to keep its default.
 
 ## Command-line options
 
@@ -175,7 +184,7 @@ variable. Run `--help` for the full list:
 
 ```
 CONFIG FILE:
-    --config <FILE>               Load a YAML config file [MQTT_CONFIG_FILE]
+    --config <FILE>               Load a JSON config file [MQTT_CONFIG_FILE]
 NETWORK:
     --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
     --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
@@ -305,7 +314,7 @@ implemented; a `GET /mcp` returns 405.)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MQTT_CONFIG_FILE` | _(auto)_ | YAML config file path (else `pulsemq.yaml` in cwd) |
+| `MQTT_CONFIG_FILE` | _(auto)_ | JSON config file path (else `pulsemq.json` in cwd) |
 | `MQTT_LISTEN_ADDR` | `0.0.0.0:1883` | MQTT listener bind address |
 | `MQTT_TLS_CERT` / `MQTT_TLS_KEY` | _(unset)_ | PEM cert + key; both set = TLS on the MQTT port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
@@ -523,27 +532,45 @@ PulseMQ can **forward** messages to and from remote MQTT brokers (like a
 mosquitto bridge) — e.g. to aggregate edge brokers up to a central one, or fan a
 central broker's topics down to the edge. Each bridge is an outbound MQTT client
 in its own task with **automatic reconnect + backoff**, over any transport
-(`tcp`/`tls`/`ws`/`wss`). Bridges are configured as a list in the YAML config
+(`tcp`/`tls`/`ws`/`wss`). Bridges are configured as an array in the JSON config
 file (config-file only):
 
-```yaml
-bridges:
-  - name: central
-    address: "tls://central.example:8883"   # tcp|tls|ws|wss (mqtt/mqtts alias tcp/tls)
-    client_id: "pulsemq-edge-1"             # optional (default pulsemq-bridge-<name>)
-    username: "edge"                         # optional
-    password: "secret"                       # optional
-    keepalive: 30                            # seconds (default 60)
-    protocol_version: 5                      # 3 | 4 | 5 (default 5)
-    tls_ca: "certs/ca.pem"                   # required for tls/wss (unless tls_insecure)
-    tls_cert: "certs/edge.pem"               # optional (mutual TLS)
-    tls_key: "certs/edge.key"
-    # tls_insecure: false                    # skip server cert verification (danger; testing)
-    topics:
-      - { pattern: "sensors/#", direction: out, qos: 1 }  # local -> remote
-      - { pattern: "cmd/#",     direction: in,  qos: 1 }  # remote -> local
-      - { pattern: "state/#",   direction: both, qos: 0 } # both ways
+```json
+{
+  "bridges": [
+    {
+      "name": "central",
+      "address": "tls://central.example:8883",
+      "client_id": "pulsemq-edge-1",
+      "username": "edge",
+      "password": "secret",
+      "keepalive": 30,
+      "protocol_version": 5,
+      "tls_ca": "certs/ca.pem",
+      "tls_cert": "certs/edge.pem",
+      "tls_key": "certs/edge.key",
+      "topics": [
+        { "pattern": "sensors/#", "direction": "out", "qos": 1 },
+        { "pattern": "cmd/#", "direction": "in", "qos": 1 },
+        { "pattern": "state/#", "direction": "both", "qos": 0 }
+      ]
+    }
+  ]
+}
 ```
+
+| Key | Required | Notes |
+| --- | --- | --- |
+| `name` | yes | Identifies the bridge in logs and metrics |
+| `address` | yes | `tcp`/`tls`/`ws`/`wss` (`mqtt`/`mqtts` alias `tcp`/`tls`) |
+| `client_id` | no | Defaults to `pulsemq-bridge-<name>` |
+| `username`, `password` | no | Credentials for the remote broker |
+| `keepalive` | no | Seconds; default 60 |
+| `protocol_version` | no | `3`, `4`, or `5`; default 5 |
+| `tls_ca` | for tls/wss | CA bundle verifying the remote (unless `tls_insecure`) |
+| `tls_cert`, `tls_key` | no | Client certificate for mutual TLS |
+| `tls_insecure` | no | Skips server-certificate verification — **testing only**, logs a warning at startup |
+| `topics` | yes | At least one mapping; `direction` is `in`/`out`/`both`, `qos` is 0/1/2 |
 
 Notes: the local broker→bridge hop is QoS 0 (in-process) and the mapping's QoS
 applies on the bridge↔remote link. Loop prevention uses `no_local`, so a message

@@ -7,8 +7,7 @@
 *.db
 *.db-wal
 *.db-shm
-pulsemq.yaml
-pulsemq.yml
+pulsemq.json
 spec/
 
 # Editor / OS cruft

@@ -3,13 +3,13 @@
 
 use std::net::SocketAddr;
 
-use yaml_rust2::{Yaml, YamlLoader};
+use serde_json::Value;
 
 use crate::error::{MqttError, Result};
 use crate::types::QoS;
 
-/// Config-file keys recognised in YAML (mirrors the env/CLI options).
-const KNOWN_YAML_KEYS: &[&str] = &[
+/// Config-file keys recognised in the JSON config (mirrors the env/CLI options).
+const KNOWN_KEYS: &[&str] = &[
     "listen_addr",
     "admin_addr",
     "admin_token",
@@ -39,7 +39,7 @@ const KNOWN_YAML_KEYS: &[&str] = &[
 ];
 
 /// Default config-file names looked for in the working directory.
-const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.yaml", "pulsemq.yml"];
+const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.json"];
 
 /// Crate version, surfaced by `--version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -139,7 +139,7 @@ pub struct Config {
     pub max_queued_messages: u32,
     /// Broker-to-broker forwarding bridges (config-file only). See `bridge`.
     pub bridges: Vec<crate::bridge::BridgeConfig>,
-    /// Path of the YAML config file that was loaded, if any (informational).
+    /// Path of the JSON config file that was loaded, if any (informational).
     pub config_file: Option<String>,
 }
 
@@ -288,7 +288,7 @@ fn overlay_opt(slot: &mut Option<String>, value: Option<String>) {
 }
 
 impl Config {
-    /// Full configuration pipeline: defaults, then a YAML config file (if any),
+    /// Full configuration pipeline: defaults, then a JSON config file (if any),
     /// then environment variables, then command-line flags — each layer
     /// overriding the previous. Returns `Startup::Exit` for `--help`/`--version`.
     pub fn load() -> Result<Startup> {
@@ -316,10 +316,10 @@ impl Config {
         // otherwise fall back to a default file in the working directory.
         let explicit = cli_config_path(&args).or_else(|| non_empty_env("MQTT_CONFIG_FILE"));
         match explicit {
-            Some(path) => cfg.apply_yaml_file(&path)?,
+            Some(path) => cfg.apply_json_file(&path)?,
             None => {
                 if let Some(path) = default_config_file() {
-                    cfg.apply_yaml_file(&path)?;
+                    cfg.apply_json_file(&path)?;
                 }
             }
         }
@@ -328,124 +328,125 @@ impl Config {
         cfg.apply_args(&args)
     }
 
-    /// Read and apply a YAML config file, recording its path.
-    pub fn apply_yaml_file(&mut self, path: &str) -> Result<()> {
+    /// Read and apply a JSON config file, recording its path.
+    pub fn apply_json_file(&mut self, path: &str) -> Result<()> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| MqttError::Config(format!("read config file {path}: {e}")))?;
-        self.apply_yaml_str(&text, path)?;
+        self.apply_json_str(&text, path)?;
         self.config_file = Some(path.to_string());
         Ok(())
     }
 
-    /// Overlay YAML config text onto this config. `source` names the file for
+    /// Overlay JSON config text onto this config. `source` names the file for
     /// error messages. Unknown keys and wrong value types are rejected.
-    pub fn apply_yaml_str(&mut self, text: &str, source: &str) -> Result<()> {
-        let docs = YamlLoader::load_from_str(text)
-            .map_err(|e| MqttError::Config(format!("{source}: invalid YAML: {e}")))?;
-        let Some(doc) = docs.first() else {
-            return Ok(()); // empty file
-        };
+    pub fn apply_json_str(&mut self, text: &str, source: &str) -> Result<()> {
+        // An entirely blank file is treated as "no overrides" rather than a
+        // parse error, so touching the config file is harmless.
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let doc: Value = serde_json::from_str(text)
+            .map_err(|e| MqttError::Config(format!("{source}: invalid JSON: {e}")))?;
         if doc.is_null() {
             return Ok(());
         }
-        let Yaml::Hash(map) = doc else {
+        let Some(map) = doc.as_object() else {
             return Err(MqttError::Config(format!(
-                "{source}: top level must be a mapping of option: value"
+                "{source}: top level must be a JSON object of \"option\": value pairs"
             )));
         };
-        for k in map.keys() {
-            if let Some(key) = k.as_str() {
-                if !KNOWN_YAML_KEYS.contains(&key) {
-                    return Err(MqttError::Config(format!("{source}: unknown key '{key}'")));
-                }
+        for key in map.keys() {
+            if !KNOWN_KEYS.contains(&key.as_str()) {
+                return Err(MqttError::Config(format!("{source}: unknown key '{key}'")));
             }
         }
+        let doc = &doc;
 
         // Socket addresses.
-        if let Some(v) = y_str(doc, "listen_addr", source)? {
+        if let Some(v) = j_str(doc, "listen_addr", source)? {
             self.listen_addr = parse_addr(&v, "listen_addr")?;
         }
-        if let Some(v) = y_str(doc, "admin_addr", source)? {
+        if let Some(v) = j_str(doc, "admin_addr", source)? {
             self.admin_addr = parse_addr(&v, "admin_addr")?;
         }
-        if let Some(v) = y_str(doc, "ws_listen_addr", source)? {
+        if let Some(v) = j_str(doc, "ws_listen_addr", source)? {
             self.ws_listen_addr = Some(parse_addr(&v, "ws_listen_addr")?);
         }
 
         // String / path options.
-        if let Some(v) = y_str(doc, "admin_token", source)? {
+        if let Some(v) = j_str(doc, "admin_token", source)? {
             self.admin_token = Some(Secret::new(v));
         }
-        if let Some(v) = y_str(doc, "tls_cert", source)? {
+        if let Some(v) = j_str(doc, "tls_cert", source)? {
             self.tls_cert = Some(v);
         }
-        if let Some(v) = y_str(doc, "tls_key", source)? {
+        if let Some(v) = j_str(doc, "tls_key", source)? {
             self.tls_key = Some(v);
         }
-        if let Some(v) = y_str(doc, "tls_client_ca", source)? {
+        if let Some(v) = j_str(doc, "tls_client_ca", source)? {
             self.tls_client_ca = Some(v);
         }
-        if let Some(v) = y_str(doc, "ws_tls_cert", source)? {
+        if let Some(v) = j_str(doc, "ws_tls_cert", source)? {
             self.ws_tls_cert = Some(v);
         }
-        if let Some(v) = y_str(doc, "ws_tls_key", source)? {
+        if let Some(v) = j_str(doc, "ws_tls_key", source)? {
             self.ws_tls_key = Some(v);
         }
-        if let Some(v) = y_str(doc, "ws_tls_client_ca", source)? {
+        if let Some(v) = j_str(doc, "ws_tls_client_ca", source)? {
             self.ws_tls_client_ca = Some(v);
         }
-        if let Some(v) = y_str(doc, "admin_tls_cert", source)? {
+        if let Some(v) = j_str(doc, "admin_tls_cert", source)? {
             self.admin_tls_cert = Some(v);
         }
-        if let Some(v) = y_str(doc, "admin_tls_key", source)? {
+        if let Some(v) = j_str(doc, "admin_tls_key", source)? {
             self.admin_tls_key = Some(v);
         }
-        if let Some(v) = y_str(doc, "admin_tls_client_ca", source)? {
+        if let Some(v) = j_str(doc, "admin_tls_client_ca", source)? {
             self.admin_tls_client_ca = Some(v);
         }
-        if let Some(v) = y_str(doc, "acl_path", source)? {
+        if let Some(v) = j_str(doc, "acl_path", source)? {
             self.acl_path = Some(v);
         }
-        if let Some(v) = y_str(doc, "password_file", source)? {
+        if let Some(v) = j_str(doc, "password_file", source)? {
             self.password_file = Some(v);
         }
-        if let Some(b) = y_bool(doc, "allow_anonymous", source)? {
+        if let Some(b) = j_bool(doc, "allow_anonymous", source)? {
             self.allow_anonymous = b;
         }
-        if let Some(v) = y_str(doc, "db_path", source)? {
+        if let Some(v) = j_str(doc, "db_path", source)? {
             self.db_path = v;
         }
 
         // Integers.
-        if let Some(n) = y_u32(doc, "max_packet_size", source)? {
+        if let Some(n) = j_u32(doc, "max_packet_size", source)? {
             self.max_packet_size = n;
         }
-        if let Some(n) = y_u32(doc, "max_session_expiry", source)? {
+        if let Some(n) = j_u32(doc, "max_session_expiry", source)? {
             self.max_session_expiry = n;
         }
-        if let Some(n) = y_u32(doc, "max_queued_messages", source)? {
+        if let Some(n) = j_u32(doc, "max_queued_messages", source)? {
             self.max_queued_messages = n;
         }
-        if let Some(n) = y_i64(doc, "receive_maximum", source)? {
+        if let Some(n) = j_i64(doc, "receive_maximum", source)? {
             self.receive_maximum = u16::try_from(n).map_err(|_| {
                 MqttError::Config(format!("{source}: receive_maximum out of range (0-65535)"))
             })?;
         }
-        if let Some(n) = y_i64(doc, "topic_alias_maximum", source)? {
+        if let Some(n) = j_i64(doc, "topic_alias_maximum", source)? {
             self.topic_alias_maximum = u16::try_from(n).map_err(|_| {
                 MqttError::Config(format!(
                     "{source}: topic_alias_maximum out of range (0-65535)"
                 ))
             })?;
         }
-        if let Some(n) = y_i64(doc, "server_keep_alive", source)? {
+        if let Some(n) = j_i64(doc, "server_keep_alive", source)? {
             self.server_keep_alive = Some(u16::try_from(n).map_err(|_| {
                 MqttError::Config(format!(
                     "{source}: server_keep_alive out of range (0-65535)"
                 ))
             })?);
         }
-        if let Some(n) = y_i64(doc, "maximum_qos", source)? {
+        if let Some(n) = j_i64(doc, "maximum_qos", source)? {
             self.maximum_qos = u8::try_from(n)
                 .ok()
                 .and_then(|b| QoS::from_u8(b).ok())
@@ -453,11 +454,11 @@ impl Config {
                     MqttError::Config(format!("{source}: maximum_qos must be 0, 1, or 2"))
                 })?;
         }
-        if let Some(b) = y_bool(doc, "retain_available", source)? {
+        if let Some(b) = j_bool(doc, "retain_available", source)? {
             self.retain_available = b;
         }
 
-        // Bridges are a structured list; parsed by the bridge module. A config
+        // Bridges are a structured array; parsed by the bridge module. A config
         // file that omits `bridges` leaves any already-set value untouched.
         let bridges = crate::bridge::parse_bridges(doc, source)?;
         if !bridges.is_empty() {
@@ -491,10 +492,11 @@ fn default_config_file() -> Option<String> {
         .map(|name| name.to_string())
 }
 
-/// Read a string value from a YAML mapping, erroring on a wrong type.
-fn y_str(doc: &Yaml, key: &str, source: &str) -> Result<Option<String>> {
+/// Read a string value from the config object, erroring on a wrong type.
+/// A missing key and an explicit `null` both mean "not set".
+fn j_str(doc: &Value, key: &str, source: &str) -> Result<Option<String>> {
     let v = &doc[key];
-    if v.is_badvalue() || v.is_null() {
+    if v.is_null() {
         return Ok(None);
     }
     match v.as_str() {
@@ -506,10 +508,11 @@ fn y_str(doc: &Yaml, key: &str, source: &str) -> Result<Option<String>> {
     }
 }
 
-/// Read an integer value from a YAML mapping, erroring on a wrong type.
-fn y_i64(doc: &Yaml, key: &str, source: &str) -> Result<Option<i64>> {
+/// Read an integer value from the config object, erroring on a wrong type.
+/// A JSON float (`5.5`) is rejected rather than silently truncated.
+fn j_i64(doc: &Value, key: &str, source: &str) -> Result<Option<i64>> {
     let v = &doc[key];
-    if v.is_badvalue() || v.is_null() {
+    if v.is_null() {
         return Ok(None);
     }
     match v.as_i64() {
@@ -520,10 +523,10 @@ fn y_i64(doc: &Yaml, key: &str, source: &str) -> Result<Option<i64>> {
     }
 }
 
-/// Read a boolean value from a YAML mapping, erroring on a wrong type.
-fn y_bool(doc: &Yaml, key: &str, source: &str) -> Result<Option<bool>> {
+/// Read a boolean value from the config object, erroring on a wrong type.
+fn j_bool(doc: &Value, key: &str, source: &str) -> Result<Option<bool>> {
     let v = &doc[key];
-    if v.is_badvalue() || v.is_null() {
+    if v.is_null() {
         return Ok(None);
     }
     match v.as_bool() {
@@ -534,9 +537,9 @@ fn y_bool(doc: &Yaml, key: &str, source: &str) -> Result<Option<bool>> {
     }
 }
 
-/// Read a `u32` value from a YAML mapping.
-fn y_u32(doc: &Yaml, key: &str, source: &str) -> Result<Option<u32>> {
-    match y_i64(doc, key, source)? {
+/// Read a `u32` value from the config object.
+fn j_u32(doc: &Value, key: &str, source: &str) -> Result<Option<u32>> {
+    match j_i64(doc, key, source)? {
         Some(n) => Ok(Some(u32::try_from(n).map_err(|_| {
             MqttError::Config(format!("{source}: key '{key}' out of range (0-4294967295)"))
         })?)),
@@ -568,13 +571,13 @@ USAGE:
     pulsemq [OPTIONS]
 
 Every option can also be set via the environment variable shown in brackets, or
-in a YAML config file (key = the option name with underscores, e.g. listen_addr).
+in a JSON config file (key = the option name with underscores, e.g. listen_addr).
 Precedence, lowest to highest: config file < environment < command-line flags.
 
 CONFIG FILE:
-    --config <FILE>               Load this YAML config file [MQTT_CONFIG_FILE].
-                                  If omitted, pulsemq.yaml (or .yml) in the
-                                  working directory is used when present.
+    --config <FILE>               Load this JSON config file [MQTT_CONFIG_FILE].
+                                  If omitted, pulsemq.json in the working
+                                  directory is used when present.
 
 NETWORK:
     --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
@@ -812,21 +815,21 @@ mod tests {
     }
 
     #[test]
-    fn yaml_config_applies_all_field_kinds() {
-        let yaml = r#"
-listen_addr: "127.0.0.1:1884"
-ws_listen_addr: "0.0.0.0:8080"
-tls_cert: "server.pem"
-admin_token: "sekret"
-acl_path: "acl.json"
-db_path: "/data/broker.db"
-max_packet_size: 2097152
-receive_maximum: 100
-max_session_expiry: 600
-max_queued_messages: 42
-"#;
+    fn json_config_applies_all_field_kinds() {
+        let json = r#"{
+  "listen_addr": "127.0.0.1:1884",
+  "ws_listen_addr": "0.0.0.0:8080",
+  "tls_cert": "server.pem",
+  "admin_token": "sekret",
+  "acl_path": "acl.json",
+  "db_path": "/data/broker.db",
+  "max_packet_size": 2097152,
+  "receive_maximum": 100,
+  "max_session_expiry": 600,
+  "max_queued_messages": 42
+}"#;
         let mut cfg = Config::default();
-        cfg.apply_yaml_str(yaml, "test.yaml").unwrap();
+        cfg.apply_json_str(json, "test.json").unwrap();
         assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
         assert_eq!(
             cfg.ws_listen_addr.map(|a| a.to_string()).as_deref(),
@@ -848,7 +851,7 @@ max_queued_messages: 42
         assert_eq!(Config::default().max_queued_messages, 1000);
 
         let mut cfg = Config::default();
-        cfg.apply_yaml_str("max_queued_messages: 5\n", "t.yaml")
+        cfg.apply_json_str(r#"{"max_queued_messages": 5}"#, "t.json")
             .unwrap();
         assert_eq!(cfg.max_queued_messages, 5);
 
@@ -864,17 +867,17 @@ max_queued_messages: 42
 
         // 0 is a legal opt-out, not a parse error.
         let mut cfg = Config::default();
-        cfg.apply_yaml_str("max_queued_messages: 0\n", "t.yaml")
+        cfg.apply_json_str(r#"{"max_queued_messages": 0}"#, "t.json")
             .unwrap();
         assert_eq!(cfg.max_queued_messages, 0);
     }
 
     #[test]
-    fn cli_flags_override_yaml() {
+    fn cli_flags_override_config_file() {
         let mut cfg = Config::default();
-        cfg.apply_yaml_str(
-            "listen_addr: \"127.0.0.1:1\"\nreceive_maximum: 5\n",
-            "t.yaml",
+        cfg.apply_json_str(
+            r#"{"listen_addr": "127.0.0.1:1", "receive_maximum": 5}"#,
+            "t.json",
         )
         .unwrap();
         // CLI applied on top of the file wins.
@@ -890,22 +893,32 @@ max_queued_messages: 42
     }
 
     #[test]
-    fn yaml_rejects_unknown_key_and_bad_type() {
-        let mut cfg = Config::default();
-        assert!(cfg.apply_yaml_str("listen_port: 1883\n", "t.yaml").is_err());
+    fn json_rejects_unknown_key_and_bad_type() {
         let mut cfg = Config::default();
         assert!(cfg
-            .apply_yaml_str("receive_maximum: \"lots\"\n", "t.yaml")
+            .apply_json_str(r#"{"listen_port": 1883}"#, "t.json")
             .is_err());
         let mut cfg = Config::default();
-        assert!(cfg.apply_yaml_str("- a\n- b\n", "t.yaml").is_err());
+        assert!(cfg
+            .apply_json_str(r#"{"receive_maximum": "lots"}"#, "t.json")
+            .is_err());
+        let mut cfg = Config::default();
+        // Top level must be an object, not an array.
+        assert!(cfg.apply_json_str("[1, 2]", "t.json").is_err());
+        // Malformed JSON is a clear error, not a silent no-op.
+        assert!(cfg.apply_json_str("{not json", "t.json").is_err());
+        // A float where an integer is required must not be truncated.
+        assert!(cfg
+            .apply_json_str(r#"{"receive_maximum": 5.5}"#, "t.json")
+            .is_err());
     }
 
     #[test]
-    fn yaml_protocol_capabilities() {
-        let yaml = "maximum_qos: 1\nretain_available: false\ntopic_alias_maximum: 5\nserver_keep_alive: 30\n";
+    fn json_protocol_capabilities() {
+        let json = r#"{"maximum_qos": 1, "retain_available": false,
+                       "topic_alias_maximum": 5, "server_keep_alive": 30}"#;
         let mut cfg = Config::default();
-        cfg.apply_yaml_str(yaml, "t.yaml").unwrap();
+        cfg.apply_json_str(json, "t.json").unwrap();
         assert_eq!(cfg.maximum_qos, QoS::AtLeastOnce);
         assert!(!cfg.retain_available);
         assert_eq!(cfg.topic_alias_maximum, 5);
@@ -913,11 +926,13 @@ max_queued_messages: 42
 
         // Out-of-range QoS is rejected.
         let mut bad = Config::default();
-        assert!(bad.apply_yaml_str("maximum_qos: 3\n", "t.yaml").is_err());
+        assert!(bad
+            .apply_json_str(r#"{"maximum_qos": 3}"#, "t.json")
+            .is_err());
         // Wrong type for a boolean is rejected.
         let mut bad = Config::default();
         assert!(bad
-            .apply_yaml_str("retain_available: \"yes\"\n", "t.yaml")
+            .apply_json_str(r#"{"retain_available": "yes"}"#, "t.json")
             .is_err());
     }
 
@@ -948,9 +963,32 @@ max_queued_messages: 42
     }
 
     #[test]
-    fn empty_yaml_is_ok() {
+    fn empty_config_file_is_ok() {
         let mut cfg = Config::default();
-        assert!(cfg.apply_yaml_str("", "t.yaml").is_ok());
-        assert!(cfg.apply_yaml_str("# just a comment\n", "t.yaml").is_ok());
+        // A blank or whitespace-only file means "no overrides", so creating the
+        // file before filling it in is not a startup failure.
+        assert!(cfg.apply_json_str("", "t.json").is_ok());
+        assert!(cfg.apply_json_str("   \n\t\n", "t.json").is_ok());
+        // An empty object and an explicit null are also no-ops.
+        assert!(cfg.apply_json_str("{}", "t.json").is_ok());
+        assert!(cfg.apply_json_str("null", "t.json").is_ok());
+    }
+
+    #[test]
+    fn comments_are_rejected_as_invalid_json() {
+        // Documents a deliberate trade-off of the move from YAML: the config is
+        // strict JSON, so the annotated example that YAML allowed is gone and
+        // per-option documentation lives in the README instead. A `#` line is a
+        // parse error rather than being silently ignored, so anyone porting a
+        // commented pulsemq.yaml is told plainly instead of having options
+        // quietly dropped.
+        let mut cfg = Config::default();
+        assert!(cfg.apply_json_str("# just a comment\n", "t.json").is_err());
+        assert!(cfg
+            .apply_json_str(
+                "{\n  // listener\n  \"listen_addr\": \"0.0.0.0:1\"\n}",
+                "t.json"
+            )
+            .is_err());
     }
 }

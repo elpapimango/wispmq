@@ -9,6 +9,5 @@
 # Windows "mark of the web" alternate-data-stream artifacts
 *:Zone.Identifier
 
-# Local config (may hold secrets); the tracked template is *.example.yaml
-pulsemq.yaml
-pulsemq.yml
+# Local config (may hold secrets); the tracked template is pulsemq.example.json
+pulsemq.json
