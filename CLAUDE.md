@@ -147,6 +147,9 @@ cargo fmt --all -- --check                              # formatting (CI-enforce
 cargo clippy --all-targets --all-features -- -D warnings # lints (CI-enforced)
 ```
 
+After bumping the crate version, run plain `cargo build` once — `--locked` fails
+until `Cargo.lock` records the new version.
+
 CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings`, `build --locked`,
 and `test --locked` on push/PR to `main`, then repeats build and test with
 `--features otel`. **Keep all four green** — run them
@@ -295,6 +298,10 @@ checked **once**, at startup, rather than per layer: the env layer cannot return
 an error, so a per-layer check would silently ignore a bad env value while
 rejecting the same value from the config file.
 
+The whole config pipeline runs **before** the `tracing` subscriber exists, so a
+`warn!` in `apply_env`/`apply_json_str` goes nowhere — use `eprintln!`, as `main`
+does for config errors.
+
 ## Tests
 
 73 tests on default features (79 with `--features otel`), plus two `#[ignore]`d
@@ -336,6 +343,10 @@ Pattern for a broker-backed test: bind an ephemeral port with
 `TcpListener::bind("127.0.0.1:0")`, read the addr, drop the listener, then hand
 the addr to the broker. Use `Storage::null()` to avoid touching a real DB.
 
+To prove a renderer refactor changed nothing, dump its output for a
+fully-populated `Snapshot` to the scratchpad before and after and `diff` them —
+far cheaper than a golden string in the repo, and it covers every field.
+
 ## Environment gotchas
 
 - **zsh does not word-split unquoted variables.** For `mosquitto_pub/sub` flags
@@ -347,6 +358,8 @@ the addr to the broker. Use `Storage::null()` to avoid touching a real DB.
 - Put temporary files in the session scratchpad, not the repo.
 - TLS pins the rustls **ring** provider explicitly (`tls.rs`); don't rely on a
   process-default crypto provider.
+- `cargo info <crate>` **truncates** the feature list. For the full table read
+  `~/.cargo/registry/src/*/<crate>-<version>/Cargo.toml`.
 
 ## Docker
 

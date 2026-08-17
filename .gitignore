@@ -11,3 +11,6 @@
 
 # Local config (may hold secrets); the tracked template is pulsemq.example.json
 pulsemq.json
+
+# Machine-specific Claude notes (see CLAUDE.md for the shared ones)
+.claude.local.md
