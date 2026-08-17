@@ -328,9 +328,17 @@ async fn sys_and_prometheus_report_the_same_values() {
             "mqtt_socket_connections_total",
             "$SYS/broker/connections/socket/count",
         ),
+        // The per-control-packet series, distinct from the aggregate
+        // publish counter above. These two pairs used to share the name
+        // `mqtt_publish_received_total`, and this table asserted the same
+        // Prometheus name against both $SYS topics without noticing.
         (
-            "mqtt_publish_received_total",
+            "mqtt_packet_publish_received_total",
             "$SYS/broker/mqtt/publish/received",
+        ),
+        (
+            "mqtt_packet_connect_received_total",
+            "$SYS/broker/mqtt/connect/received",
         ),
     ] {
         let from_sys: u64 = sys[sys_topic]
@@ -360,4 +368,65 @@ async fn sys_and_prometheus_report_the_same_values() {
     );
     assert!(snap.socket_connections >= 1, "sockets were not counted");
     assert!(snap.clients_maximum >= 1, "clients_maximum was not tracked");
+}
+
+/// The Prometheus exposition must never repeat a metric name.
+///
+/// A name appearing twice with its own HELP/TYPE block is invalid exposition:
+/// the scrape either errors or silently keeps one series and drops the other, so
+/// a dashboard reads a plausible-looking number that is not what it claims to
+/// be. This actually shipped — the per-control-packet counters were named
+/// `mqtt_{packet}_{received,sent}_total`, which for PUBLISH collided with the
+/// aggregate `mqtt_publish_received_total` / `mqtt_publish_sent_total`. Nothing
+/// caught it: `sys_and_prometheus_report_the_same_values` compares *values*, and
+/// the two colliding series happened to hold the same number.
+///
+/// Checks structure only, so it needs no traffic — just a broker to snapshot.
+#[test]
+fn no_duplicate_metric_names() {
+    let broker = Broker::new(
+        Config::default(),
+        Storage::null(),
+        Default::default(),
+        Acl::permit_all(),
+        None,
+    );
+    let prom = broker.snapshot().to_prometheus();
+
+    /// Metric name from a `# HELP <name> ...` line.
+    fn help_name(line: &str) -> Option<String> {
+        line.strip_prefix("# HELP ")
+            .and_then(|r| r.split_whitespace().next())
+            .map(str::to_string)
+    }
+    /// Metric name from a `<name> <value>` or `<name>{labels} <value>` line.
+    fn sample_name(line: &str) -> Option<String> {
+        if line.starts_with('#') || line.trim().is_empty() {
+            return None;
+        }
+        line.split_whitespace()
+            .next()
+            .map(|n| n.split('{').next().unwrap_or(n).to_string())
+    }
+
+    let mut declared: Vec<String> = prom.lines().filter_map(help_name).collect();
+    let mut emitted: Vec<String> = prom.lines().filter_map(sample_name).collect();
+    assert!(declared.len() > 40, "suspiciously few metrics parsed");
+
+    for (what, names) in [("HELP", &mut declared), ("sample", &mut emitted)] {
+        names.sort();
+        let dupes: Vec<&String> = names
+            .windows(2)
+            .filter(|w| w[0] == w[1])
+            .map(|w| &w[0])
+            .collect();
+        assert!(
+            dupes.is_empty(),
+            "duplicate {what} lines in /metrics for: {dupes:?}"
+        );
+    }
+
+    // Every declared metric must also emit a sample and vice versa, so a rename
+    // cannot leave a HELP block orphaned.
+    assert_eq!(declared, emitted, "HELP blocks and samples disagree");
 }

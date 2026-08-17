@@ -18,13 +18,16 @@ project.
 
 ## Project history & status
 
-Current status: the crate version is **1.0.2**, carrying the post-1.0.0 work on
+Current status: the crate version is **1.1.0**, carrying the post-1.0.0 work on
 `main` (forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, clap CLI, the
-5C refactor — see "Done since 1.0.0" below). The last *tagged* release is still
+5C refactor — see "Done since 1.0.0" below). It is a **minor** bump, not a patch:
+the JSON config move, the `Startup`/`HELP` library-API changes and the
+`mqtt_packet_*` metric rename are all breaking for existing consumers. The last
+*tagged* release is still
 **v1.0.0** (tag `v1.0.0`, GitHub Release,
 `ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is
-ahead of both the tag and that image. **1.0.2 is not tagged or released yet** —
-cutting it means pushing a `v1.0.2` tag (which triggers `docker.yml`) and
+ahead of both the tag and that image. **1.1.0 is not tagged or released yet** —
+cutting it means pushing a `v1.1.0` tag (which triggers `docker.yml`) and
 creating the GitHub Release. CI (`ci.yml`) and image builds (`docker.yml`) are
 green. `git log` has the detail — this is the map.
 
@@ -183,6 +186,13 @@ asserts the two agree. Counters live in `metrics::Metrics` (atomics, incremented
 on the hot path via `record_received`/`record_sent`); gauges are computed under
 the lock in `Broker::snapshot()`.
 
+The per-control-packet Prometheus series are `mqtt_packet_<packet>_...`, **not**
+`mqtt_<packet>_...`: the latter collided with the aggregate
+`mqtt_publish_{received,sent}_total` and made `/metrics` repeat a metric name,
+which is invalid exposition. `tests/sysinfo.rs::no_duplicate_metric_names` now
+fails on any repeated name or orphaned HELP block — keep it passing when adding a
+statistic, because the value-agreement test cannot see a name clash.
+
 `$SYS` invariants, all covered by tests: `#`/`+` never match `$SYS` (§4.7.2, so
 ordinary subscribers are unaffected); clients cannot publish under `$SYS`
 (refused `0x90`); values are retained **in memory only**, never persisted; and
@@ -219,7 +229,7 @@ README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
 
 ## Tests
 
-59 tests, plus two `#[ignore]`d benchmarks. Unit tests live in-module (`topic`,
+60 tests, plus two `#[ignore]`d benchmarks. Unit tests live in-module (`topic`,
 `acl`, `cli`, `config`, `auth`, `storage`); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
@@ -308,7 +318,7 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (59 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (60 tests), then
   `cargo run -- --help`.
 
 ## Conventions

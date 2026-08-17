@@ -189,7 +189,7 @@ the `load/*` topics are mainly for $SYS parity.
 | `messages/received` · `messages/sent` | `mqtt_messages_received_total` · `mqtt_messages_sent_total` |
 | `publish/messages/received` · `/sent` · `/dropped` | `mqtt_publish_received_total` (exist) · `mqtt_publish_sent_total` · `mqtt_publish_dropped_total` |
 | `publish/bytes/received` · `/sent` | `mqtt_publish_bytes_received_total` · `mqtt_publish_bytes_sent_total` |
-| `mqtt/<packet>/{received,sent}` | `mqtt_<packet>_{received,sent}_total` |
+| `mqtt/<packet>/{received,sent}` | `mqtt_packet_<packet>_{received,sent}_total` (renamed in 1.1.0; the original `mqtt_<packet>_...` collided with the aggregate publish counters) |
 | `clients/connected` · `/disconnected` · `/total` · `/maximum` · `/expired` | `mqtt_clients_connected` (exist) · `mqtt_clients_disconnected` · `mqtt_clients_total` · `mqtt_clients_maximum` · `mqtt_clients_expired_total` |
 | `subscriptions/count` · `shared_subscriptions/count` | `mqtt_subscriptions_total` (exist) · `mqtt_shared_subscriptions_count` |
 | `retained messages/count` | `mqtt_retained_messages` (exist) |
@@ -476,7 +476,7 @@ path to the bridge. The parts that *are* genuinely shareable are already shared:
 `framing::read_packet`/`write_packet`, the packet/codec layer, `tls::client_config`
 and `ws::client`.
 
-Two observations recorded rather than acted on:
+One observation recorded rather than acted on:
 - `SubRecord::to_topic_filter` has no callers, but it is public API on a public
   struct, so removing it is a breaking change rather than a drive-by cleanup.
 - The bridge writes to its remote via `write_packet` directly, so those packets

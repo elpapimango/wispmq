@@ -294,14 +294,23 @@ impl Snapshot {
 
         // Per-control-packet counters. Index 0 is the reserved type and is
         // never a real packet, so it is skipped.
+        //
+        // The `mqtt_packet_` prefix is load-bearing: these were originally
+        // `mqtt_{name}_{received,sent}_total`, which for PUBLISH collided with
+        // the `mqtt_publish_received_total` / `mqtt_publish_sent_total` counters
+        // above. Prometheus exposition must not repeat a metric name with a
+        // second HELP/TYPE block, so a scrape saw a duplicate and dropped or
+        // errored on it. `$SYS` never had the clash — it keeps these under a
+        // separate `mqtt/` sub-hierarchy — so only the flattened Prometheus
+        // names needed the prefix. `no_duplicate_metric_names` guards it now.
         for (kind, name) in PACKET_NAMES.iter().enumerate().skip(1) {
             counter(
-                &format!("mqtt_{name}_received_total"),
+                &format!("mqtt_packet_{name}_received_total"),
                 &format!("Total {} packets received.", name.to_uppercase()),
                 self.packet_received[kind],
             );
             counter(
-                &format!("mqtt_{name}_sent_total"),
+                &format!("mqtt_packet_{name}_sent_total"),
                 &format!("Total {} packets sent.", name.to_uppercase()),
                 self.packet_sent[kind],
             );

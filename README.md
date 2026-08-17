@@ -290,10 +290,19 @@ packet counters, for mosquitto parity), `mqtt_bytes_received_total`,
 `max_queued_messages`), `mqtt_publish_bytes_received_total`,
 `mqtt_publish_bytes_sent_total` (payload bytes, excluding framing).
 
-**Per-control-packet counters** — `mqtt_<packet>_received_total` and
-`mqtt_<packet>_sent_total` for each of `connect`, `connack`, `publish`,
+**Per-control-packet counters** — `mqtt_packet_<packet>_received_total` and
+`mqtt_packet_<packet>_sent_total` for each of `connect`, `connack`, `publish`,
 `puback`, `pubrec`, `pubrel`, `pubcomp`, `subscribe`, `suback`, `unsubscribe`,
-`unsuback`, `pingreq`, `pingresp`, `disconnect`, `auth`.
+`unsuback`, `pingreq`, `pingresp`, `disconnect`, `auth`. On `$SYS` the same
+values are under `$SYS/broker/mqtt/<packet>/{received,sent}`.
+
+> **Renamed in 1.1.0.** These were `mqtt_<packet>_..._total`, which for PUBLISH
+> collided with the aggregate `mqtt_publish_received_total` /
+> `mqtt_publish_sent_total` above and made `/metrics` emit a duplicate metric
+> name — invalid exposition, so a scrape errored or dropped one of the two
+> series. If you have dashboards or alerts on `mqtt_publish_*_total` and meant
+> the per-packet counter, point them at `mqtt_packet_publish_*_total`. The
+> `$SYS` topics were never affected and have not changed.
 
 **Client gauges** — `mqtt_clients_connected`, `mqtt_clients_disconnected`
 (offline persistent sessions), `mqtt_clients_total`, `mqtt_clients_maximum`
@@ -326,7 +335,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
 ```
 
 ```
-$SYS/broker/version PulseMQ 1.0.2
+$SYS/broker/version PulseMQ 1.1.0
 $SYS/broker/uptime 15 seconds
 $SYS/broker/clients/connected 1
 $SYS/broker/clients/total 1
