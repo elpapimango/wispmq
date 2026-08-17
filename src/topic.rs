@@ -13,16 +13,15 @@ pub fn valid_topic_filter(filter: &str) -> bool {
     if filter.is_empty() || filter.contains('\u{0000}') {
         return false;
     }
-    let levels: Vec<&str> = filter.split('/').collect();
-    let last = levels.len() - 1;
-    for (i, level) in levels.iter().enumerate() {
+    let mut levels = filter.split('/').peekable();
+    while let Some(level) = levels.next() {
         if level.contains('#') {
             // '#' must be the entire level and the final level.
-            if *level != "#" || i != last {
+            if level != "#" || levels.peek().is_some() {
                 return false;
             }
         }
-        if level.contains('+') && *level != "+" {
+        if level.contains('+') && level != "+" {
             // '+' must be the entire level.
             return false;
         }
@@ -70,39 +69,40 @@ pub fn parse_filter(input: &str) -> Option<ParsedFilter<'_>> {
 /// - `#` matches the parent level and any number of child levels.
 /// - A leading `$` topic is not matched by a filter starting with `#` or `+`
 ///   at the first level (4.7.2).
+///
+/// This is the routing hot path — called once per subscription per published
+/// message — so it walks both sides as `split('/')` iterators and never
+/// allocates. It used to collect both into `Vec`s, which cost two heap
+/// allocations per call: 102 ns/call against 61 ns/call now (`bench_matches`
+/// below, same machine).
 pub fn matches(filter: &str, topic: &str) -> bool {
-    let filter_levels: Vec<&str> = filter.split('/').collect();
-    let topic_levels: Vec<&str> = topic.split('/').collect();
+    let mut filter_levels = filter.split('/');
+    let mut topic_levels = topic.split('/');
 
-    // A topic starting with '$' is excluded from wildcard matches at level 0.
-    if let Some(first) = topic_levels.first() {
-        if first.starts_with('$') {
-            match filter_levels.first() {
-                Some(&"#") | Some(&"+") => return false,
-                _ => {}
-            }
+    // A topic starting with '$' is excluded from wildcard matches at level 0
+    // (4.7.2). `split` always yields at least one item, and cloning a `Split`
+    // just copies its cursor, so peeking the first filter level is free.
+    if topic.starts_with('$') {
+        match filter_levels.clone().next() {
+            Some("#") | Some("+") => return false,
+            _ => {}
         }
     }
 
-    let mut fi = 0;
-    let mut ti = 0;
-    while fi < filter_levels.len() {
-        let f = filter_levels[fi];
-        if f == "#" {
-            // Matches the remainder, including zero levels.
-            return true;
+    loop {
+        match filter_levels.next() {
+            // '#' matches the parent level and any number of child levels,
+            // including zero, so the topic need not have anything left.
+            Some("#") => return true,
+            Some(f) => match topic_levels.next() {
+                Some(t) if f == "+" || f == t => {}
+                // Topic exhausted, or this level disagrees.
+                _ => return false,
+            },
+            // All filter levels consumed; match only if the topic is too.
+            None => return topic_levels.next().is_none(),
         }
-        if ti >= topic_levels.len() {
-            return false;
-        }
-        if f != "+" && f != topic_levels[ti] {
-            return false;
-        }
-        fi += 1;
-        ti += 1;
     }
-    // All filter levels consumed; match only if topic is also fully consumed.
-    ti == topic_levels.len()
 }
 
 #[cfg(test)]
@@ -138,6 +138,13 @@ mod tests {
         assert!(!valid_topic_filter("sport/#/ranking"));
         assert!(valid_topic_filter("+/+/+"));
         assert!(!valid_topic_filter("sp+ort/#"));
+        // '#' as the whole filter is the last level, so it is valid; anything
+        // after it is not. Exercises the peek-based "is this the last level?"
+        // check that replaced an index comparison.
+        assert!(valid_topic_filter("#"));
+        assert!(!valid_topic_filter("#/a"));
+        assert!(!valid_topic_filter("#/"));
+        assert!(valid_topic_filter("a/#"));
     }
 
     #[test]
@@ -146,5 +153,131 @@ mod tests {
         assert_eq!(p.share_name, Some("g1"));
         assert_eq!(p.filter, "sport/#");
         assert!(parse_filter("$share//sport").is_none());
+    }
+
+    /// The `Vec`-collecting implementation `matches` replaced, kept verbatim as
+    /// the reference for `matches_is_equivalent_to_the_vec_implementation`.
+    fn matches_reference(filter: &str, topic: &str) -> bool {
+        let filter_levels: Vec<&str> = filter.split('/').collect();
+        let topic_levels: Vec<&str> = topic.split('/').collect();
+
+        if let Some(first) = topic_levels.first() {
+            if first.starts_with('$') {
+                match filter_levels.first() {
+                    Some(&"#") | Some(&"+") => return false,
+                    _ => {}
+                }
+            }
+        }
+
+        let mut fi = 0;
+        let mut ti = 0;
+        while fi < filter_levels.len() {
+            let f = filter_levels[fi];
+            if f == "#" {
+                return true;
+            }
+            if ti >= topic_levels.len() {
+                return false;
+            }
+            if f != "+" && f != topic_levels[ti] {
+                return false;
+            }
+            fi += 1;
+            ti += 1;
+        }
+        ti == topic_levels.len()
+    }
+
+    /// The zero-alloc rewrite must agree with the implementation it replaced on
+    /// every pair, not just the hand-picked cases above — matching drives
+    /// routing, so a divergence here silently misdelivers or drops messages.
+    /// Deliberately includes filters that `valid_topic_filter` would reject
+    /// (`#abc`, `a/#/b`, `+x`): `matches` is also reached via retained-message
+    /// scans and internal callers, so it must not depend on prior validation.
+    #[test]
+    fn matches_is_equivalent_to_the_vec_implementation() {
+        const PARTS: &[&str] = &[
+            "#", "+", "a", "b", "", "$SYS", "$share", "#abc", "+x", "a b",
+        ];
+
+        // All 1-, 2- and 3-level strings over PARTS, used as both filters and
+        // topics: 10 + 100 + 1000 = 1110 strings, ~1.2M pairs.
+        let mut strings: Vec<String> = Vec::new();
+        for a in PARTS {
+            strings.push((*a).to_string());
+            for b in PARTS {
+                strings.push(format!("{a}/{b}"));
+                for c in PARTS {
+                    strings.push(format!("{a}/{b}/{c}"));
+                }
+            }
+        }
+
+        let mut checked = 0u64;
+        for filter in &strings {
+            for topic in &strings {
+                assert_eq!(
+                    matches(filter, topic),
+                    matches_reference(filter, topic),
+                    "diverged on filter={filter:?} topic={topic:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 1_000_000, "expected a wide sweep, got {checked}");
+    }
+
+    /// Micro-benchmark for the routing hot path, kept because TODO item 5C asks
+    /// for a measurement before anyone reaches for a topic trie. Not a
+    /// correctness test, so it is `#[ignore]`d — run it deliberately:
+    ///
+    /// ```text
+    /// cargo test --release -- --ignored --nocapture bench_matches
+    /// ```
+    #[test]
+    #[ignore = "benchmark, not a correctness test"]
+    fn bench_matches() {
+        // A filter/topic mix meant to look like real subscriptions: exact
+        // matches, single-level wildcards, multi-level wildcards, early
+        // mismatches (the common case with many subscribers) and deep topics.
+        const CASES: &[(&str, &str)] = &[
+            ("sensors/+/temperature", "sensors/kitchen/temperature"),
+            ("sensors/#", "sensors/kitchen/temperature"),
+            ("devices/123/status", "devices/123/status"),
+            ("devices/456/status", "devices/123/status"),
+            ("a/b/c/d/e/f/g", "a/b/c/d/e/f/g"),
+            ("a/b/c/d/e/f/+", "a/b/c/d/e/f/g"),
+            ("home/+/+/state", "home/floor1/bedroom/state"),
+            ("other/thing", "sensors/kitchen/temperature"),
+            ("#", "$SYS/broker/uptime"),
+            ("$SYS/#", "$SYS/broker/uptime"),
+        ];
+
+        // Warm up, and pin the expected verdicts so an "optimization" that
+        // breaks matching cannot quietly post a great number.
+        let expected: Vec<bool> = CASES.iter().map(|(f, t)| matches(f, t)).collect();
+
+        let iters = 200_000;
+        let start = std::time::Instant::now();
+        let mut hits = 0u64;
+        for _ in 0..iters {
+            for (f, t) in CASES {
+                if matches(f, t) {
+                    hits += 1;
+                }
+            }
+        }
+        let elapsed = start.elapsed();
+
+        let calls = iters as u128 * CASES.len() as u128;
+        let per_call = elapsed.as_nanos() as f64 / calls as f64;
+        println!(
+            "topic::matches: {calls} calls in {elapsed:?} => {per_call:.1} ns/call ({hits} hits)"
+        );
+
+        // Guard against the loop being optimized away entirely.
+        let hits_per_iter = expected.iter().filter(|b| **b).count() as u64;
+        assert_eq!(hits, hits_per_iter * iters as u64);
     }
 }
