@@ -18,12 +18,13 @@ project.
 
 ## Project history & status
 
-Current status: the crate version is **1.0.1**, carrying the post-1.0.0 work on
-`main` (forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, clap CLI — see
-"Done since 1.0.0" below). The last *tagged* release is still **v1.0.0** (tag
-`v1.0.0`, GitHub Release, `ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is
-ahead of both the tag and that image. **1.0.1 is not tagged or released yet** —
-cutting it means pushing a `v1.0.1` tag (which triggers `docker.yml`) and
+Current status: the crate version is **1.0.2**, carrying the post-1.0.0 work on
+`main` (forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, clap CLI, the
+5C refactor — see "Done since 1.0.0" below). The last *tagged* release is still
+**v1.0.0** (tag `v1.0.0`, GitHub Release,
+`ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is
+ahead of both the tag and that image. **1.0.2 is not tagged or released yet** —
+cutting it means pushing a `v1.0.2` tag (which triggers `docker.yml`) and
 creating the GitHub Release. CI (`ci.yml`) and image builds (`docker.yml`) are
 green. `git log` has the detail — this is the map.
 
