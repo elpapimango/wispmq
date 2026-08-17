@@ -26,8 +26,8 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 `metrics::Snapshot` rather than building a parallel counter set, so it benefits
 from item 2 already being done, and it must be feature-gated and off by default.
 
-`v1.1.1` is tagged and its image is published; a GitHub Release object has not
-been created for it (see the release note at the bottom of this file).
+`v1.1.1` is fully released — tagged, image published, and a GitHub Release object
+created and marked latest (see the release note at the bottom of this file).
 
 ---
 
@@ -606,19 +606,22 @@ out in 1.1.1 with a note rather than silently.
 
 ---
 
-## Release: v1.1.1 is tagged; no GitHub Release object yet
+## Release: v1.1.1 is fully released
 
-`main` is at crate version **1.1.1**, tagged `v1.1.1`, and the tag push triggered
-`docker.yml` to publish `ghcr.io/elpapimango/pulsemq:1.1.1`. What is *not* done is
-the GitHub Release object:
+`main` is at crate version **1.1.1**, tagged `v1.1.1`, the tag push triggered
+`docker.yml` to publish `ghcr.io/elpapimango/pulsemq:1.1.1`, and the **GitHub
+Release object exists** and is marked latest:
 
-```bash
-gh release create v1.1.1 --generate-notes
-```
+<https://github.com/elpapimango/pulsemq/releases/tag/v1.1.1>
+
+The notes were **hand-written, not `--generate-notes`** — auto-generated notes are
+a commit list, which buries the part that actually matters to someone upgrading.
+The body leads with a breaking-changes section and then covers forwarding,
+metrics, the security audit and the performance work.
 
 **1.1.0 was never tagged**, so v1.1.1 is the first tagged build carrying every
-post-1.0.0 change. Release notes should therefore describe the delta from
-**1.0.0**, and call out the four things that break an existing 1.0.0 deployment:
+post-1.0.0 change. The notes therefore describe the delta from **1.0.0**, and
+call out the four things that break an existing 1.0.0 deployment:
 
 - the config file is JSON, not YAML (item 3) — a `pulsemq.yaml` no longer loads;
 - `config::Startup` lost `Exit` and gained `HashPassword`, and `config::HELP` is

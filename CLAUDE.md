@@ -25,11 +25,13 @@ a patch, because three of those are breaking for existing consumers: the JSON
 config move, the `Startup`/`HELP` library-API changes, and the `mqtt_packet_*`
 metric rename.
 
-**v1.1.1 is tagged** (`v1.1.1`), which triggered `docker.yml` to publish
-`ghcr.io/elpapimango/pulsemq:1.1.1`. A **GitHub Release** has not been created
-for it — `v1.0.0` still has the only Release object. Note 1.1.0 was never tagged,
-so 1.1.1 is the first tagged build carrying every post-1.0.0 change; release
-notes should describe the delta from **1.0.0**, not from 1.1.0. CI (`ci.yml`) and
+**v1.1.1 is released**: tagged `v1.1.1` (which triggered `docker.yml` to publish
+`ghcr.io/elpapimango/pulsemq:1.1.1`) and a **GitHub Release** object exists,
+marked latest. Note 1.1.0 was never tagged, so 1.1.1 is the first tagged build
+carrying every post-1.0.0 change — its release notes describe the delta from
+**1.0.0**, not from 1.1.0, and lead with the four breaking changes (JSON config,
+the `mqtt_packet_*` rename, bridge traffic in the counters, and the
+`Startup`/`HELP` library-API change). CI (`ci.yml`) and
 image builds (`docker.yml`) are green on `main`. `git log` has the detail — this
 is the map.
 
@@ -332,14 +334,18 @@ Notes for picking up in a new session/machine:
   `passwd` credential file, and `*.db` state — all regenerable. Cert-gen
   commands are in the README (TLS section) and `tests/websocket.rs` generates a
   wss cert in-test via `rcgen`, so the automated suite is self-contained.
-- **The GitHub repo is PRIVATE** (made private 2026-08-17). A fresh clone needs
-  an authenticated `gh auth login` / credential helper; the README badges will
-  not render for anonymous viewers. The GHCR **package is still public** —
-  package visibility is managed separately from the repo, so
-  `docker pull ghcr.io/elpapimango/pulsemq` still works without auth. Make it
-  private with
+- **The GitHub repo is PUBLIC.** It was briefly private on 2026-08-17 and made
+  public again the same day, so anonymous clones work and the README badges
+  render. Nothing sensitive was ever committed — no cert, key, `*.db` or
+  credential file appears anywhere in history (verified before going public; the
+  TLS test PKI and `passwd` files have always been session-scratch only). The
+  GHCR **package is public** too, but note its visibility is managed
+  *separately* from the repo: flipping the repo does not flip the package. Change
+  the package with
   `gh api -X PATCH /user/packages/container/pulsemq --field visibility=private`
-  (needs `write:packages`).
+  (needs `write:packages`), and the repo with
+  `gh repo edit elpapimango/pulsemq --visibility private
+  --accept-visibility-change-consequences`.
 - **GitHub/GHCR**: repo `elpapimango/pulsemq`; image
   `ghcr.io/elpapimango/pulsemq`. Image pushes happen only via `docker.yml`
   (workflow `GITHUB_TOKEN` has `packages: write`). Managing GHCR packages from
