@@ -20,14 +20,17 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 5B | Security review | ✅ done |
 | 5C | Refactor & optimize | ✅ done (1 bullet declined) |
 | — | [Bridge send metrics](#resolved-bridge-traffic-is-counted) | ✅ resolved — counted |
-| **6** | **Telemetry/log export (OTLP)** | **next** |
+| 6 | Telemetry/log export (OTLP) | ✅ done (feature-gated `otel`) |
 
-**Item 6 is the only work left.** It should reuse the existing
-`metrics::Snapshot` rather than building a parallel counter set, so it benefits
-from item 2 already being done, and it must be feature-gated and off by default.
+**The roadmap is clear.** Every numbered item is done. Anything new starts a
+fresh entry here.
 
-`v1.1.1` is fully released — tagged, image published, and a GitHub Release object
-created and marked latest (see the release note at the bottom of this file).
+`main` is at crate version **1.2.0** (item 6), which is **not tagged or released
+yet** — no `v1.2.0` tag, no image, no GitHub Release. The last release is
+`v1.1.1`: tagged, image published, GitHub Release created and marked latest (see
+the release note at the bottom of this file). To ship 1.2.0, tag `v1.2.0` — the
+tag push triggers `docker.yml` — and hand-write the release notes the way
+v1.1.1's were done.
 
 ---
 
@@ -513,7 +516,78 @@ Original notes follow.
 
 ---
 
-## 6. Ship telemetry & logs to Datadog / Splunk / OTLP
+## 6. Ship telemetry & logs to Datadog / Splunk / OTLP — ✅ DONE
+
+Implemented in `src/otel.rs` behind the non-default **`otel`** Cargo feature,
+exporting **metrics and logs** over **OTLP/HTTP-protobuf**. Off unless
+`otlp_endpoint` is set. `tests/otel.rs` stands up a fake collector — a TCP
+listener speaking just enough HTTP — and asserts on what actually went over the
+socket, so the wire path is covered rather than just the type-checking.
+
+### Decisions worth recording
+
+- **Metrics reuse `Snapshot`, and the reuse is now enforced.** `to_prometheus`
+  used to hold its own copy of the field list; it was refactored onto a new
+  `Snapshot::series() -> Vec<Series>` that the OTLP exporter also consumes, so
+  a statistic cannot reach one surface and miss the other. The Prometheus
+  output is **byte-identical** to before the refactor (verified by diffing a
+  fully-populated snapshot's rendering against the pre-change binary).
+- **`Series.name` is the full Prometheus name; `otel_name()` strips `_total`
+  for counters only.** The original plan was to store base names and append
+  `_total` when rendering, on the belief that every counter ends in `_total`
+  and no gauge does. False: `mqtt_sessions_total` and
+  `mqtt_subscriptions_total` are gauges. Renaming those would have silently
+  broken every dashboard reading them.
+- **HTTP/protobuf only, no gRPC.** One transport, one dependency tree. `grpc`
+  is a startup error naming the missing build option, in *both* builds — a
+  value must not be accepted by the lean binary and rejected by the otel one.
+- **Observable instruments with a shared per-cycle snapshot cache.** The 0.32
+  SDK invokes each instrument's callback separately, so the naive version takes
+  ~60 snapshots per export — and sixty *different* ones, which would let a
+  single export report `packets_received` and `bytes_received` from different
+  instants. The cache is time-windowed (half the export interval) rather than
+  counting instrument reads, so a partial collection cannot wedge it.
+- **`otlp_endpoint` is a base URL.** The exporter's programmatic
+  `with_endpoint` appends nothing, so `otel::signal_url` adds `/v1/metrics` and
+  `/v1/logs`. Getting this wrong posts everything to `/`.
+- **The exporter's own targets are excluded from the exported logs.** An
+  export failure logs an error, which would be queued for export, which fails —
+  a loop that saturates the queue and hides everything else. Those lines still
+  reach the console, which is how the failure is seen.
+- **`otlp_headers` values are `config::Secret`** with a redacting `Debug` on
+  the collection: names show (an operator needs them), values never do.
+- **The config keys parse and validate in every build**, so one file is
+  portable; a lean binary asked to export warns loudly instead of doing nothing.
+- `OTEL_EXPORTER_OTLP_*` env vars are deliberately **not** read — one source of
+  truth.
+
+### Acceptance criteria — verified
+
+- [x] Metrics and logs arrive at a collector: `tests/otel.rs` asserts the
+      request path, the API-key header, and that the protobuf body carries
+      `mqtt_packets_received` (counter, `_total` stripped),
+      `mqtt_sessions_total` (gauge, kept), `service.name` and `service.version`
+      — plus the log message and its structured fields.
+- [x] Disabled by default; `cargo tree` shows **zero** OpenTelemetry/reqwest
+      crates in the default build.
+- [x] A dead collector degrades gracefully. Measured live: 25 s with nothing
+      listening and a 2 s interval gave **one** error line (not a loop), RSS
+      flat at 27192 kB start to finish, and `/health` still answering.
+- [x] No secrets in exported logs (`Secret` + the redacting `Debug`, with a
+      test asserting the value never appears in `{cfg:?}`).
+- [x] Config wired through every layer with tests, README "OTLP telemetry
+      export" section, `pulsemq.example.json`, a CI job for the feature build,
+      and a `FEATURES` build-arg on the Dockerfile.
+
+### Not done, on purpose
+
+- **Traces/spans.** Nothing in the broker is instrumented with spans, so there
+  would be nothing to send. Per-connection spans remain a possible later phase.
+- **Direct Splunk HEC and Datadog intakes.** Both ingest OTLP, directly or via
+  the Collector, so a vendor-specific path would be a second thing to maintain
+  for no new reach.
+
+Original notes follow.
 
 Let PulseMQ push its **logs** and **metrics** to an external observability
 backend, instead of only being scraped on `/metrics`. Useful for edge/Pi

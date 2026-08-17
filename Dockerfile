@@ -5,6 +5,9 @@
 # requested $TARGETARCH via a cross toolchain — avoids emulating the whole build.
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
 ARG TARGETARCH
+# Extra Cargo features, empty by default so the published image stays lean.
+# Build an OTLP-exporting image with: docker build --build-arg FEATURES=otel .
+ARG FEATURES=
 WORKDIR /app
 
 # aarch64 (arm64) cross toolchain (incl. target libc headers) + Rust targets.
@@ -27,7 +30,9 @@ RUN set -eux; \
     arm64) target=aarch64-unknown-linux-gnu ;; \
     *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac; \
-    cargo build --release --locked --target "$target" --bin pulsemq; \
+    features=""; \
+    if [ -n "$FEATURES" ]; then features="--features $FEATURES"; fi; \
+    cargo build --release --locked --target "$target" --bin pulsemq $features; \
     cp "target/$target/release/pulsemq" /pulsemq
 
 # ---- Runtime stage (target architecture) ----

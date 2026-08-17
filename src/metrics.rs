@@ -8,6 +8,7 @@
 //! read the same struct, so they cannot report different numbers for the same
 //! instant.
 
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::types::PacketType;
@@ -194,14 +195,65 @@ pub struct Snapshot {
     pub version: &'static str,
 }
 
+/// Whether a [`Series`] accumulates monotonically or reports a current value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeriesKind {
+    Counter,
+    Gauge,
+}
+
+/// One statistic, named as Prometheus exposes it.
+///
+/// [`Snapshot::series`] is the single enumeration of the broker's statistics.
+/// Both `/metrics` and the OTLP exporter render *this* list, so a statistic
+/// added in one place cannot go missing from the other. (`$SYS` is the
+/// exception — it uses mosquitto's own topic hierarchy, which is a different
+/// naming scheme rather than a rendering of these names; see
+/// [`Snapshot::to_sys_topics`].)
+#[derive(Debug, Clone)]
+pub struct Series {
+    /// The Prometheus name, `_total` suffix included where one applies.
+    pub name: Cow<'static, str>,
+    pub kind: SeriesKind,
+    pub help: Cow<'static, str>,
+    pub value: u64,
+}
+
+impl Series {
+    /// The name to use for an OpenTelemetry instrument.
+    ///
+    /// OTel counters carry no `_total` suffix — a Collector's Prometheus
+    /// exporter appends one, and exporting `mqtt_packets_received_total` would
+    /// come out the far end as `mqtt_packets_received_total_total`. The strip
+    /// is deliberately restricted to counters: `mqtt_sessions_total` and
+    /// `mqtt_subscriptions_total` are *gauges* that happen to end in `_total`,
+    /// and renaming those would silently change what an existing dashboard
+    /// reads.
+    pub fn otel_name(&self) -> &str {
+        match self.kind {
+            SeriesKind::Counter => self.name.strip_suffix("_total").unwrap_or(&self.name),
+            SeriesKind::Gauge => &self.name,
+        }
+    }
+}
+
 impl Snapshot {
-    /// Render the snapshot in the Prometheus text exposition format (v0.0.4).
-    pub fn to_prometheus(&self) -> String {
-        let mut o = String::with_capacity(2048);
-        let mut counter = |name: &str, help: &str, val: u64| {
-            o.push_str(&format!(
-                "# HELP {name} {help}\n# TYPE {name} counter\n{name} {val}\n"
-            ));
+    /// Every statistic in the snapshot, in a stable order: counters first
+    /// (including the per-control-packet array), then gauges.
+    ///
+    /// `mqtt_build_info` is not here. It is a constant-1 gauge whose payload is
+    /// a *label*, not a value, so it has no `u64` to report; `to_prometheus`
+    /// writes it directly and the OTLP exporter puts the version on the
+    /// Resource as `service.version` instead.
+    pub fn series(&self) -> Vec<Series> {
+        let mut v: Vec<Series> = Vec::with_capacity(64);
+        let mut counter = |name: &'static str, help: &'static str, value: u64| {
+            v.push(Series {
+                name: Cow::Borrowed(name),
+                kind: SeriesKind::Counter,
+                help: Cow::Borrowed(help),
+                value,
+            });
         };
         counter(
             "mqtt_connections_total",
@@ -304,22 +356,26 @@ impl Snapshot {
         // separate `mqtt/` sub-hierarchy — so only the flattened Prometheus
         // names needed the prefix. `no_duplicate_metric_names` guards it now.
         for (kind, name) in PACKET_NAMES.iter().enumerate().skip(1) {
-            counter(
-                &format!("mqtt_packet_{name}_received_total"),
-                &format!("Total {} packets received.", name.to_uppercase()),
-                self.packet_received[kind],
-            );
-            counter(
-                &format!("mqtt_packet_{name}_sent_total"),
-                &format!("Total {} packets sent.", name.to_uppercase()),
-                self.packet_sent[kind],
-            );
+            for (suffix, verb, value) in [
+                ("received", "received", self.packet_received[kind]),
+                ("sent", "sent", self.packet_sent[kind]),
+            ] {
+                v.push(Series {
+                    name: Cow::Owned(format!("mqtt_packet_{name}_{suffix}_total")),
+                    kind: SeriesKind::Counter,
+                    help: Cow::Owned(format!("Total {} packets {verb}.", name.to_uppercase())),
+                    value,
+                });
+            }
         }
 
-        let mut gauge = |name: &str, help: &str, val: u64| {
-            o.push_str(&format!(
-                "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {val}\n"
-            ));
+        let mut gauge = |name: &'static str, help: &'static str, value: u64| {
+            v.push(Series {
+                name: Cow::Borrowed(name),
+                kind: SeriesKind::Gauge,
+                help: Cow::Borrowed(help),
+                value,
+            });
         };
         gauge(
             "mqtt_clients_connected",
@@ -396,6 +452,23 @@ impl Snapshot {
             "Seconds since the broker started.",
             self.uptime_seconds,
         );
+        v
+    }
+
+    /// Render the snapshot in the Prometheus text exposition format (v0.0.4).
+    pub fn to_prometheus(&self) -> String {
+        let mut o = String::with_capacity(2048);
+        for s in self.series() {
+            let (name, value) = (&s.name, s.value);
+            let ty = match s.kind {
+                SeriesKind::Counter => "counter",
+                SeriesKind::Gauge => "gauge",
+            };
+            o.push_str(&format!(
+                "# HELP {name} {}\n# TYPE {name} {ty}\n{name} {value}\n",
+                s.help
+            ));
+        }
         // Version as a static label on a constant-1 gauge, the conventional way
         // to expose build info to Prometheus.
         o.push_str(
@@ -487,5 +560,128 @@ impl Snapshot {
             );
         }
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A snapshot whose every field holds a distinct value, so a series wired
+    /// to the wrong field shows up as a wrong number rather than a matching
+    /// zero.
+    fn distinct() -> Snapshot {
+        let mut n = 0u64;
+        let mut next = || {
+            n += 1;
+            n
+        };
+        let mut packet_received = [0u64; PACKET_KINDS];
+        let mut packet_sent = [0u64; PACKET_KINDS];
+        for slot in packet_received.iter_mut().chain(packet_sent.iter_mut()) {
+            *slot = next();
+        }
+        Snapshot {
+            connections_total: next(),
+            packets_received: next(),
+            packets_sent: next(),
+            bytes_received: next(),
+            bytes_sent: next(),
+            publish_received: next(),
+            publish_delivered: next(),
+            publish_dropped: next(),
+            bridge_forwarded_out: next(),
+            bridge_forwarded_in: next(),
+            publish_bytes_received: next(),
+            publish_bytes_sent: next(),
+            socket_connections: next(),
+            clients_expired: next(),
+            packet_received,
+            packet_sent,
+            clients_connected: next(),
+            clients_disconnected: next(),
+            clients_total: next(),
+            clients_maximum: next(),
+            sessions_total: next(),
+            retained_messages: next(),
+            retained_bytes: next(),
+            subscriptions_total: next(),
+            shared_subscriptions_count: next(),
+            bridges_connected: next(),
+            store_messages_count: next(),
+            store_messages_bytes: next(),
+            packet_out_count: next(),
+            packet_out_bytes: next(),
+            uptime_seconds: next(),
+            version: "test",
+        }
+    }
+
+    #[test]
+    fn series_names_are_unique() {
+        // A repeated name is invalid Prometheus exposition and would make two
+        // OTLP instruments collide. `tests/sysinfo.rs::no_duplicate_metric_names`
+        // checks the rendered text; this checks the source list.
+        let series = distinct().series();
+        let mut names: Vec<&str> = series.iter().map(|s| s.name.as_ref()).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "duplicate series name");
+    }
+
+    #[test]
+    fn every_series_reaches_the_prometheus_text() {
+        // The renderer must not silently skip an entry: `to_prometheus` is a
+        // rendering of `series()`, not a second, drifting list.
+        let snap = distinct();
+        let text = snap.to_prometheus();
+        for s in snap.series() {
+            let ty = match s.kind {
+                SeriesKind::Counter => "counter",
+                SeriesKind::Gauge => "gauge",
+            };
+            assert!(
+                text.contains(&format!("# TYPE {} {ty}\n{} {}\n", s.name, s.name, s.value)),
+                "missing or mistyped series {}",
+                s.name
+            );
+        }
+    }
+
+    #[test]
+    fn otel_names_strip_total_from_counters_only() {
+        let series = distinct().series();
+        let find = |name: &str| {
+            series
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("no series {name}"))
+        };
+
+        // Counters lose the suffix so a Collector's Prometheus exporter does
+        // not emit `..._total_total`.
+        assert_eq!(
+            find("mqtt_packets_received_total").otel_name(),
+            "mqtt_packets_received"
+        );
+        assert_eq!(
+            find("mqtt_packet_publish_sent_total").otel_name(),
+            "mqtt_packet_publish_sent"
+        );
+
+        // These two are gauges that happen to end in `_total`. Stripping them
+        // would rename a series every existing dashboard already reads.
+        for name in ["mqtt_sessions_total", "mqtt_subscriptions_total"] {
+            let s = find(name);
+            assert_eq!(s.kind, SeriesKind::Gauge, "{name}");
+            assert_eq!(s.otel_name(), name);
+        }
+
+        // A gauge with no suffix is unchanged either way.
+        assert_eq!(
+            find("mqtt_clients_connected").otel_name(),
+            "mqtt_clients_connected"
+        );
     }
 }

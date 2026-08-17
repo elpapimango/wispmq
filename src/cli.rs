@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 
 use clap::Parser;
 
-use crate::config::{parse_bool_value, parse_qos_value, Config, Secret};
+use crate::config::{parse_bool_value, parse_qos_value, Config, OtlpHeaders, Secret};
 use crate::types::QoS;
 
 /// Command-line options. Flag names are derived from the field names, so
@@ -199,6 +199,73 @@ pub(crate) struct Cli {
         help_heading = "Protocol capabilities (advertised in CONNACK)"
     )]
     pub server_keep_alive: Option<u16>,
+
+    /// OTLP collector base URL, e.g. http://127.0.0.1:4318; unset disables
+    /// telemetry export [MQTT_OTLP_ENDPOINT]
+    #[arg(
+        long,
+        value_name = "URL",
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub otlp_endpoint: Option<String>,
+
+    /// OTLP transport [MQTT_OTLP_PROTOCOL] (default http; this build is
+    /// HTTP/protobuf only)
+    #[arg(
+        long,
+        value_name = "http",
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub otlp_protocol: Option<String>,
+
+    /// Header sent with every export request, e.g. --otlp-header
+    /// "DD-API-KEY=..."; repeatable [MQTT_OTLP_HEADERS]
+    #[arg(
+        long,
+        value_name = "NAME=VALUE",
+        value_parser = header_flag,
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub otlp_header: Vec<(String, String)>,
+
+    /// Metric export interval [MQTT_OTLP_INTERVAL] (default 60)
+    #[arg(
+        long,
+        value_name = "SECS",
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub otlp_interval: Option<u32>,
+
+    /// Export metrics [MQTT_OTLP_METRICS] (default true)
+    #[arg(
+        long,
+        value_name = "BOOL",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = bool_flag,
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub otlp_metrics: Option<bool>,
+
+    /// Export logs [MQTT_OTLP_LOGS] (default true)
+    #[arg(
+        long,
+        value_name = "BOOL",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = bool_flag,
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub otlp_logs: Option<bool>,
+
+    /// service.name on the exported OTLP resource [MQTT_SERVICE_NAME]
+    /// (default pulsemq)
+    #[arg(
+        long,
+        value_name = "NAME",
+        help_heading = "Telemetry export (OTLP, requires --features otel)"
+    )]
+    pub service_name: Option<String>,
 }
 
 impl Cli {
@@ -265,6 +332,27 @@ impl Cli {
         if let Some(v) = self.server_keep_alive {
             cfg.server_keep_alive = Some(v);
         }
+        overlay(&mut cfg.otlp_endpoint, &self.otlp_endpoint);
+        if let Some(v) = &self.otlp_protocol {
+            cfg.otlp_protocol = v.clone();
+        }
+        // Repeated flags accumulate, so "not passed" is an empty vec — the same
+        // convention the `bridges` config list uses.
+        if !self.otlp_header.is_empty() {
+            cfg.otlp_headers = OtlpHeaders::from_pairs(self.otlp_header.iter().cloned());
+        }
+        if let Some(v) = self.otlp_interval {
+            cfg.otlp_interval = v;
+        }
+        if let Some(v) = self.otlp_metrics {
+            cfg.otlp_metrics = v;
+        }
+        if let Some(v) = self.otlp_logs {
+            cfg.otlp_logs = v;
+        }
+        if let Some(v) = &self.service_name {
+            cfg.service_name = v.clone();
+        }
     }
 }
 
@@ -285,6 +373,21 @@ fn qos_flag(v: &str) -> Result<QoS, String> {
 /// config-file layers so the three agree.
 fn bool_flag(v: &str) -> Result<bool, String> {
     parse_bool_value(v).ok_or_else(|| "expected true or false".to_string())
+}
+
+/// Parse an `--otlp-header NAME=VALUE` flag. Validating here rather than in
+/// [`Cli::apply`] keeps `apply` infallible and turns a malformed header into a
+/// clap usage error, like every other bad flag value.
+fn header_flag(v: &str) -> Result<(String, String), String> {
+    // Split once: a header value may contain '=' (base64 padding, for one).
+    let (name, value) = v
+        .split_once('=')
+        .ok_or_else(|| "expected NAME=VALUE".to_string())?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("the header name is empty".to_string());
+    }
+    Ok((name.to_string(), value.trim().to_string()))
 }
 
 #[cfg(test)]
@@ -448,6 +551,59 @@ mod tests {
         let cli = parse(&["--hash-password", "--db-path", "x.db"]);
         assert_eq!(cli.hash_password, Some(None));
         assert_eq!(cli.db_path.as_deref(), Some("x.db"));
+    }
+
+    #[test]
+    fn otlp_flags_apply() {
+        let cfg = config_from(&[
+            "--otlp-endpoint",
+            "http://127.0.0.1:4318",
+            "--otlp-interval",
+            "5",
+            "--otlp-logs",
+            "false",
+            "--service-name",
+            "edge-1",
+            "--otlp-header",
+            "DD-API-KEY=abc",
+            "--otlp-header",
+            "X-Extra=1",
+        ]);
+        assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://127.0.0.1:4318"));
+        assert_eq!(cfg.otlp_interval, 5);
+        assert!(!cfg.otlp_logs);
+        assert!(cfg.otlp_metrics); // untouched flag keeps its default
+        assert_eq!(cfg.service_name, "edge-1");
+        assert_eq!(
+            cfg.otlp_headers.iter().collect::<Vec<_>>(),
+            vec![("DD-API-KEY", "abc"), ("X-Extra", "1")]
+        );
+    }
+
+    #[test]
+    fn malformed_otlp_header_is_a_usage_error() {
+        // Validated by clap's value parser, so a typo fails at startup with a
+        // usage message instead of quietly exporting without the API key.
+        assert!(Cli::try_parse_from(["pulsemq", "--otlp-header", "no-equals"]).is_err());
+        assert!(Cli::try_parse_from(["pulsemq", "--otlp-header", "=novalue"]).is_err());
+    }
+
+    #[test]
+    fn otlp_headers_do_not_stomp_lower_layers_when_unset() {
+        // Repeated flags accumulate, so "absent" is an empty vec rather than a
+        // `None` — the emptiness check is what preserves the config file.
+        let mut cfg = Config {
+            otlp_headers: OtlpHeaders::from_pairs([(
+                "DD-API-KEY".to_string(),
+                "from-file".to_string(),
+            )]),
+            ..Config::default()
+        };
+        parse(&["--otlp-endpoint", "http://127.0.0.1:4318"]).apply(&mut cfg);
+        assert_eq!(
+            cfg.otlp_headers.iter().collect::<Vec<_>>(),
+            vec![("DD-API-KEY", "from-file")]
+        );
     }
 
     #[test]

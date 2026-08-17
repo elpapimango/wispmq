@@ -18,12 +18,18 @@ project.
 
 ## Project history & status
 
-Current status: the crate version is **1.1.1**, carrying the post-1.0.0 work on
-`main` — forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, the clap CLI
-and the 5C refactor (see "Done since 1.0.0" below). A **minor** bump rather than
-a patch, because three of those are breaking for existing consumers: the JSON
-config move, the `Startup`/`HELP` library-API changes, and the `mqtt_packet_*`
-metric rename.
+Current status: the crate version is **1.2.0**, adding OTLP telemetry export
+(item 6) on top of 1.1.1. A **minor** bump: it is additive — the feature is
+off by default, the default build carries none of its dependencies, and the
+Prometheus output is byte-identical to 1.1.1 despite the `Snapshot::series()`
+refactor underneath it. **1.2.0 is not tagged or released yet**; `main` carries
+it.
+
+The previous release, **v1.1.1**, carried the post-1.0.0 work — forwarding, the
+5A/5B audit, JSON config, `$SYS` metrics, the clap CLI and the 5C refactor (see
+"Done since 1.0.0" below). A minor bump rather than a patch, because three of
+those are breaking for existing consumers: the JSON config move, the
+`Startup`/`HELP` library-API changes, and the `mqtt_packet_*` metric rename.
 
 **v1.1.1 is released**: tagged `v1.1.1` (which triggered `docker.yml` to publish
 `ghcr.io/elpapimango/pulsemq:1.1.1`) and a **GitHub Release** object exists,
@@ -122,24 +128,28 @@ Done since 1.0.0:
   `$SYS/broker/...` retained topics (`sysinfo.rs`, `sys_interval`) and
   Prometheus series, incl. per-control-packet counters. `load/*` moving
   averages were deliberately skipped — use `rate()`.
+- (6) **OTLP telemetry export** (`otel.rs`, non-default `otel` feature) — pushes
+  metrics and logs over OTLP/HTTP-protobuf; off unless `otlp_endpoint` is set.
+  Landed with a refactor that makes the `Snapshot` reuse structural: see
+  "Metrics and `$SYS`" below.
 
-Remaining:
-
-6. **Telemetry/log export** to Datadog/Splunk/OTLP — OTLP first, feature-gated.
-   Reuse the existing `Snapshot` rather than building a parallel counter set.
+**Nothing is left on the roadmap** — every numbered item in `TODO.md` is done.
+Item 6 shipped as the **1.2.0** version bump on `main`, not yet tagged.
 
 ## Commands
 
 ```bash
 cargo build                                             # debug build
 cargo test                                              # all tests (unit + integration)
+cargo test --features otel                              # + the OTLP export suite
 cargo run -- --help                                     # list every config option
 cargo fmt --all -- --check                              # formatting (CI-enforced)
 cargo clippy --all-targets --all-features -- -D warnings # lints (CI-enforced)
 ```
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings`, `build --locked`,
-and `test --locked` on push/PR to `main`. **Keep all four green** — run them
+and `test --locked` on push/PR to `main`, then repeats build and test with
+`--features otel`. **Keep all four green** — run them
 locally before committing. Clippy is strict: two lints are allowed crate-wide in
 `src/lib.rs` (`large_enum_variant`, `result_large_err`) because the packet/frame
 enums intentionally vary in size; prefer a crate-level `allow` with a comment
@@ -173,6 +183,9 @@ before changing it.
 - `metrics` — atomic counters + gauges; one `Snapshot` rendered two ways
   (`to_prometheus`, `to_sys_topics`) so the surfaces cannot disagree
 - `sysinfo` — periodic `$SYS/broker/...` publisher (retained, `sys_interval`)
+- `otel` — OTLP export of metrics + logs, behind the `otel` Cargo feature. The
+  file holds **two** modules with identical signatures (feature on / off), so
+  `main.rs` has no `#[cfg]`; the off half is no-ops that still validate config
 - `admin` — HTTP server: `/health`, Prometheus `/metrics`, MCP `/mcp`
 - `cli` — the `clap` `Cli` struct: one `Option` field per flag, applied last
 - `config` — layered configuration (see below)
@@ -199,13 +212,28 @@ ACLs on any TLS transport.
 
 ### Metrics and `$SYS`
 
-Statistics are collected **once** into `metrics::Snapshot` and rendered
-**twice**: `to_prometheus()` for `/metrics` and `to_sys_topics()` for the
-`$SYS/broker/...` MQTT topics published by `sysinfo::run`. When adding a
-statistic, add it to `Snapshot` and to *both* renderers — `tests/sysinfo.rs`
-asserts the two agree. Counters live in `metrics::Metrics` (atomics, incremented
-on the hot path via `record_received`/`record_sent`); gauges are computed under
-the lock in `Broker::snapshot()`.
+Statistics are collected **once** into `metrics::Snapshot` and rendered on
+**three** surfaces. Two of them share one list:
+
+- `Snapshot::series()` is the canonical enumeration — `Vec<Series { name, kind,
+  help, value }>`. `to_prometheus()` renders it, and `otel.rs` builds one
+  observable instrument per entry from it. **Adding a statistic to `series()`
+  puts it on both surfaces**; there is no second list to forget.
+- `to_sys_topics()` is separate on purpose: `$SYS` uses mosquitto's own topic
+  hierarchy, which is a different naming scheme rather than a rendering of
+  these names. Add the statistic there too — `tests/sysinfo.rs` asserts the
+  `$SYS` and Prometheus values agree.
+
+`Series.name` is the **full Prometheus name**, `_total` included.
+`Series::otel_name()` strips that suffix **for counters only**, because
+`mqtt_sessions_total` and `mqtt_subscriptions_total` are *gauges* that happen to
+end in `_total` — stripping those would rename series that dashboards read.
+`mqtt_build_info` is outside `series()` (a constant-1 gauge carrying a label has
+no `u64` value); its version reaches OTLP as `service.version` on the resource.
+
+Counters live in `metrics::Metrics` (atomics, incremented on the hot path via
+`record_received`/`record_sent`); gauges are computed under the lock in
+`Broker::snapshot()`.
 
 The traffic counters (`packets_*`, `bytes_*`, `publish_bytes_*`, `mqtt_packet_*`)
 cover **both** client connections and the bridge's link to its remote — the
@@ -256,10 +284,22 @@ the `cli::Cli` struct (+ its `apply`), `apply_json_str` (+ `KNOWN_KEYS`), the
 README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
 `config` covering each layer — extend them.
 
+Two options are **structured** and so config-file-first: `bridges` (an array,
+config-file only) and `otlp_headers` (an object; also `MQTT_OTLP_HEADERS="K=V,K=V"`
+and repeated `--otlp-header K=V`). A credential value goes in `config::Secret`
+and its container gets a hand-written redacting `Debug` — `Config` derives
+`Debug` and is one `{cfg:?}` away from a log line.
+
+An option whose *value* needs validating beyond its type (`otlp_protocol`) is
+checked **once**, at startup, rather than per layer: the env layer cannot return
+an error, so a per-layer check would silently ignore a bad env value while
+rejecting the same value from the config file.
+
 ## Tests
 
-61 tests, plus two `#[ignore]`d benchmarks. Unit tests live in-module (`topic`,
-`acl`, `cli`, `config`, `auth`, `storage`); integration suites are in `tests/`:
+73 tests on default features (79 with `--features otel`), plus two `#[ignore]`d
+benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`, `config`, `auth`,
+`storage`, `metrics`, `otel`); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
@@ -282,6 +322,12 @@ README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
   --test-threads=1` (they contaminate each other in parallel). Together with
   `topic::bench_matches` these are the measurements behind the 5C decisions —
   re-run them before claiming a routing optimization.
+- `tests/otel.rs` — **`--features otel` only.** OTLP export against a fake
+  collector (a TCP listener speaking just enough HTTP), asserting on what
+  actually went over the socket: the `/v1/metrics` and `/v1/logs` paths, the
+  API-key header, and the metric/log names inside the protobuf body. Also that
+  export is off by default, that `grpc` is refused, and that an unreachable
+  collector does not block the broker.
 - `tests/sysinfo.rs` — `$SYS` publishing/retention, `sys_interval: 0`, that `#`
   does not match `$SYS`, that clients cannot publish there, and that the
   Prometheus and `$SYS` renderings of the same `Snapshot` agree.
@@ -352,18 +398,22 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (61 tests), then
-  `cargo run -- --help`.
+  --all-targets --all-features -- -D warnings && cargo test` (73 tests), then
+  `cargo run -- --help`. The OTLP suite needs its feature:
+  `cargo test --features otel` (79).
 
 ## Conventions
 
-- Keep the dependency surface small and justified; prefer std + the existing crates.
+- Keep the dependency surface small and justified; prefer std + the existing
+  crates. A dependency the default deployment does not need goes behind a
+  **non-default Cargo feature** (`otel` is the precedent — `cargo tree` must
+  show none of it in the default build).
 - When adding a config option, wire it through Config + Default, `apply_env`,
   the `cli::Cli` struct (+ its `apply`), `apply_json_str` (+ `KNOWN_KEYS`),
   README, and `pulsemq.example.json` — with tests. (See the Configuration
   checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
-  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
+  `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` trailer.
 - Real `pulsemq.json` and `*.db` files are gitignored (may hold secrets/state);
   the tracked template is `pulsemq.example.json`.

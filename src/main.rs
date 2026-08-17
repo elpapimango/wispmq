@@ -10,8 +10,11 @@ use pulsemq::auth::{self, Credentials};
 use pulsemq::broker::Broker;
 use pulsemq::config::{Config, Startup};
 use pulsemq::error::Result;
+use pulsemq::otel;
 use pulsemq::server;
 use pulsemq::storage::Storage;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,12 +30,28 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Logging: honour RUST_LOG, default to `info`.
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    // Telemetry export, if configured. Installed before the subscriber because
+    // it contributes a layer to it; it reports itself afterwards, once there is
+    // somewhere for a log line to go.
+    let (otlp_layer, mut telemetry) = match otel::install(&config) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+    };
+
+    // Logging: honour RUST_LOG, default to `info`. The OTLP layer goes on
+    // first: it is boxed against a bare `Registry`, and `EnvFilter` is a global
+    // filter, so it applies to console and exported records alike wherever it
+    // sits in the stack.
+    tracing_subscriber::registry()
+        .with(otlp_layer)
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with(tracing_subscriber::fmt::layer())
         .init();
 
     if let Some(path) = &config.config_file {
@@ -91,6 +110,12 @@ async fn main() -> Result<()> {
     };
 
     let broker = Broker::new(config, storage, loaded, acl, credentials);
+
+    // Metric export needs the broker to snapshot, so it starts here rather than
+    // alongside the log pipeline above. `report` waits until both halves exist,
+    // or it would claim metrics were off while they were still being set up.
+    otel::install_metrics(&broker, &mut telemetry, broker.config())?;
+    telemetry.report();
 
     // Admin/metrics/MCP HTTP server on its own port.
     let admin_broker = broker.clone();
@@ -151,13 +176,16 @@ async fn main() -> Result<()> {
     }
 
     // Serve MQTT until Ctrl-C.
-    tokio::select! {
+    let outcome = tokio::select! {
         res = server::run(broker) => res,
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("shutdown signal received, exiting");
             Ok(())
         }
-    }
+    };
+    // Flush the last telemetry batch — the one covering the shutdown itself.
+    telemetry.shutdown();
+    outcome
 }
 
 /// Implements `--hash-password [username]`: hash a password (from the

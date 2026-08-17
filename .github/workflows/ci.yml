@@ -38,3 +38,12 @@ jobs:
 
       - name: Test
         run: cargo test --locked --verbose
+
+      # The `otel` feature is off by default, so the steps above never build
+      # it. Clippy runs --all-features and lints it, but only these two prove
+      # the OTLP export path compiles and its wire tests pass.
+      - name: Build (otel feature)
+        run: cargo build --locked --features otel --verbose
+
+      - name: Test (otel feature)
+        run: cargo test --locked --features otel --verbose

@@ -1,6 +1,6 @@
 [package]
 name = "pulsemq"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 description = "PulseMQ — an MQTT v5.0 / 3.1.1 / 3.1 broker in Rust: TCP/TLS/mTLS/WebSockets, auth, ACLs, SQLite, Prometheus metrics"
 license = "MIT OR Apache-2.0"
@@ -9,6 +9,18 @@ homepage = "https://github.com/elpapimango/pulsemq"
 readme = "README.md"
 keywords = ["mqtt", "mqtt-broker", "broker", "iot", "tokio"]
 categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+# OTLP telemetry export (metrics + logs). Off by default: the OpenTelemetry
+# dependency tree is large and the lean default binary and Raspberry Pi image
+# must not carry it. See `src/otel.rs` and the README's Observability section.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-appender-tracing",
+]
 
 [dependencies]
 tokio = { version = "1.53", features = ["full"] }
@@ -24,6 +36,18 @@ tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 ring = "0.17"
 clap = { version = "4.6.6", features = ["derive"] }
+
+# --- optional, enabled by the `otel` feature -------------------------------
+# `default-features = false` everywhere drops the trace/span machinery: this
+# build exports metrics and logs only. The exporter uses the *blocking* reqwest
+# client on purpose — the SDK drives it from its own dedicated threads, so a
+# slow or dead collector can never occupy a tokio worker and stall the MQTT
+# path. `reqwest-rustls` gives HTTPS for direct-to-vendor endpoints without
+# dragging in OpenSSL alongside the tokio-rustls we already use.
+opentelemetry = { version = "0.32", optional = true, default-features = false, features = ["metrics", "logs"] }
+opentelemetry_sdk = { version = "0.32", optional = true, default-features = false, features = ["metrics", "logs", "internal-logs"] }
+opentelemetry-otlp = { version = "0.32", optional = true, default-features = false, features = ["http-proto", "reqwest-blocking-client", "reqwest-rustls", "metrics", "logs", "internal-logs"] }
+opentelemetry-appender-tracing = { version = "0.32", optional = true, default-features = false }
 
 [dev-dependencies]
 rcgen = "0.14"

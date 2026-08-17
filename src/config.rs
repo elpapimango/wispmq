@@ -44,6 +44,13 @@ const KNOWN_KEYS: &[&str] = &[
     "topic_alias_maximum",
     "server_keep_alive",
     "bridges",
+    "otlp_endpoint",
+    "otlp_protocol",
+    "otlp_headers",
+    "otlp_interval",
+    "otlp_metrics",
+    "otlp_logs",
+    "service_name",
 ];
 
 /// Default config-file names looked for in the working directory.
@@ -76,6 +83,94 @@ impl Secret {
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("<redacted>")
+    }
+}
+
+/// HTTP headers sent with every OTLP export request.
+///
+/// This is where a vendor API key lives (`DD-API-KEY`, `X-SF-Token`,
+/// `Authorization`), so the values are [`Secret`] and the whole collection
+/// redacts on `Debug`. A `Vec` rather than a map because the order the operator
+/// wrote is the order we send, and duplicates are the operator's business.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct OtlpHeaders(Vec<(String, Secret)>);
+
+impl OtlpHeaders {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Header name / value pairs, values exposed for the exporter to send.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v.expose()))
+    }
+
+    /// Build from already-split name/value pairs (the CLI layer, where clap's
+    /// value parser has already validated the form).
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Self {
+        OtlpHeaders(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k, Secret::new(v)))
+                .collect(),
+        )
+    }
+
+    /// Parse the `NAME=VALUE` form used by `MQTT_OTLP_HEADERS` (comma
+    /// separated) and by the config file. A pair with no `=`, or an empty name,
+    /// is an error rather than being dropped: a silently ignored API key looks
+    /// exactly like an authentication failure at the far end.
+    pub fn parse_pairs<'a>(pairs: impl IntoIterator<Item = &'a str>) -> Result<Self> {
+        let mut out = Vec::new();
+        for pair in pairs {
+            let pair = pair.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            // The value may itself contain '=' (base64 padding), so split once.
+            let (name, value) = pair
+                .split_once('=')
+                .ok_or_else(|| MqttError::Config("otlp header: expected NAME=VALUE".to_string()))?;
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(MqttError::Config(
+                    "otlp header: the header name is empty".to_string(),
+                ));
+            }
+            out.push((name.to_string(), value.trim().to_string()));
+        }
+        Ok(OtlpHeaders::from_pairs(out))
+    }
+}
+
+impl std::fmt::Debug for OtlpHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Names are safe to show and are what an operator needs to debug a
+        // rejected export; values never appear.
+        f.debug_map()
+            .entries(self.0.iter().map(|(k, _)| (k, "<redacted>")))
+            .finish()
+    }
+}
+
+/// Validate the configured OTLP transport.
+///
+/// This build is compiled with the HTTP/protobuf exporter only, so `grpc` gets
+/// its own message rather than being lumped in with a typo — it is the value
+/// people will reach for first, and the failure is a missing build option, not
+/// a bad config.
+pub fn check_otlp_protocol(v: &str) -> Result<()> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "http" | "http/protobuf" | "http-proto" => Ok(()),
+        "grpc" => Err(MqttError::Config(
+            "otlp_protocol: this build speaks OTLP over HTTP/protobuf only; point \
+             otlp_endpoint at the collector's HTTP port (4318) and set \
+             otlp_protocol to \"http\""
+                .to_string(),
+        )),
+        other => Err(MqttError::Config(format!(
+            "otlp_protocol: unknown protocol {other:?} (expected \"http\")"
+        ))),
     }
 }
 
@@ -150,6 +245,22 @@ pub struct Config {
     pub sys_interval: u32,
     /// Broker-to-broker forwarding bridges (config-file only). See `bridge`.
     pub bridges: Vec<crate::bridge::BridgeConfig>,
+    /// OTLP collector base URL, e.g. `http://127.0.0.1:4318`. `None` — the
+    /// default — disables telemetry export entirely. See `otel`.
+    pub otlp_endpoint: Option<String>,
+    /// OTLP transport. Validated by [`check_otlp_protocol`] at startup rather
+    /// than per layer, so the same message comes out whichever layer set it.
+    pub otlp_protocol: String,
+    /// Headers sent with every export request (vendor API keys).
+    pub otlp_headers: OtlpHeaders,
+    /// How often (seconds) metrics are exported.
+    pub otlp_interval: u32,
+    /// Export metrics. Ignored when `otlp_endpoint` is unset.
+    pub otlp_metrics: bool,
+    /// Export logs. Ignored when `otlp_endpoint` is unset.
+    pub otlp_logs: bool,
+    /// `service.name` on the exported OTLP resource.
+    pub service_name: String,
     /// Path of the JSON config file that was loaded, if any (informational).
     pub config_file: Option<String>,
 }
@@ -184,6 +295,13 @@ impl Default for Config {
             max_queued_messages: 1000,
             sys_interval: 10,
             bridges: Vec::new(),
+            otlp_endpoint: None,
+            otlp_protocol: "http".to_string(),
+            otlp_headers: OtlpHeaders::default(),
+            otlp_interval: 60,
+            otlp_metrics: true,
+            otlp_logs: true,
+            service_name: "pulsemq".to_string(),
             config_file: None,
         }
     }
@@ -293,6 +411,44 @@ impl Config {
             if let Ok(n) = v.parse() {
                 self.server_keep_alive = Some(n);
             }
+        }
+        overlay_opt(&mut self.otlp_endpoint, non_empty_env("MQTT_OTLP_ENDPOINT"));
+        if let Some(v) = non_empty_env("MQTT_OTLP_PROTOCOL") {
+            self.otlp_protocol = v;
+        }
+        // Unlike every other env option, a malformed value here is not ignored:
+        // the layer below cannot be "kept" in any useful sense when the thing
+        // being set is a credential, and a dropped API key is indistinguishable
+        // from an authentication failure at the collector.
+        if let Some(v) = non_empty_env("MQTT_OTLP_HEADERS") {
+            match OtlpHeaders::parse_pairs(v.split(',')) {
+                Ok(h) if !h.is_empty() => self.otlp_headers = h,
+                Ok(_) => {}
+                // `eprintln!`, not `tracing`: the whole config pipeline runs
+                // before the subscriber is installed, so a `warn!` here would
+                // go nowhere. `main` reports config errors the same way.
+                Err(e) => eprintln!("warning: MQTT_OTLP_HEADERS ignored: {e}"),
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_OTLP_INTERVAL") {
+            if let Ok(n) = v.parse() {
+                self.otlp_interval = n;
+            }
+        }
+        if let Some(b) = non_empty_env("MQTT_OTLP_METRICS")
+            .as_deref()
+            .and_then(parse_bool_value)
+        {
+            self.otlp_metrics = b;
+        }
+        if let Some(b) = non_empty_env("MQTT_OTLP_LOGS")
+            .as_deref()
+            .and_then(parse_bool_value)
+        {
+            self.otlp_logs = b;
+        }
+        if let Some(v) = non_empty_env("MQTT_SERVICE_NAME") {
+            self.service_name = v;
         }
     }
 }
@@ -477,6 +633,46 @@ impl Config {
         }
         if let Some(b) = j_bool(doc, "retain_available", source)? {
             self.retain_available = b;
+        }
+
+        // Telemetry export (see `otel`). `otlp_protocol` is stored verbatim and
+        // validated once at startup, so every layer produces one message.
+        if let Some(v) = j_str(doc, "otlp_endpoint", source)? {
+            self.otlp_endpoint = Some(v);
+        }
+        if let Some(v) = j_str(doc, "otlp_protocol", source)? {
+            self.otlp_protocol = v;
+        }
+        if let Some(v) = j_str(doc, "service_name", source)? {
+            self.service_name = v;
+        }
+        if let Some(n) = j_u32(doc, "otlp_interval", source)? {
+            self.otlp_interval = n;
+        }
+        if let Some(b) = j_bool(doc, "otlp_metrics", source)? {
+            self.otlp_metrics = b;
+        }
+        if let Some(b) = j_bool(doc, "otlp_logs", source)? {
+            self.otlp_logs = b;
+        }
+        // `otlp_headers` is the second structured option after `bridges`: a
+        // JSON object of header name to value.
+        let headers = &doc["otlp_headers"];
+        if !headers.is_null() {
+            let map = headers.as_object().ok_or_else(|| {
+                MqttError::Config(format!(
+                    "{source}: 'otlp_headers' must be an object of \"Name\": \"value\" pairs"
+                ))
+            })?;
+            let mut pairs = Vec::with_capacity(map.len());
+            for (name, value) in map {
+                let value = value.as_str().ok_or_else(|| {
+                    MqttError::Config(format!("{source}: otlp_headers['{name}'] must be a string"))
+                })?;
+                pairs.push(format!("{name}={value}"));
+            }
+            self.otlp_headers = OtlpHeaders::parse_pairs(pairs.iter().map(String::as_str))
+                .map_err(|e| MqttError::Config(format!("{source}: {e}")))?;
         }
 
         // Bridges are a structured array; parsed by the bridge module. A config
@@ -703,6 +899,105 @@ mod tests {
         // An empty object and an explicit null are also no-ops.
         assert!(cfg.apply_json_str("{}", "t.json").is_ok());
         assert!(cfg.apply_json_str("null", "t.json").is_ok());
+    }
+
+    #[test]
+    fn otlp_options_default_to_disabled() {
+        // Export must be opt-in: an existing deployment that upgrades and
+        // changes nothing must not start talking to the network.
+        let cfg = Config::default();
+        assert!(cfg.otlp_endpoint.is_none());
+        assert!(cfg.otlp_headers.is_empty());
+        assert_eq!(cfg.otlp_protocol, "http");
+        assert_eq!(cfg.otlp_interval, 60);
+        assert_eq!(cfg.service_name, "pulsemq");
+        assert!(cfg.otlp_metrics && cfg.otlp_logs);
+    }
+
+    #[test]
+    fn json_otlp_options() {
+        let json = r#"{
+  "otlp_endpoint": "http://127.0.0.1:4318",
+  "otlp_protocol": "http",
+  "otlp_headers": { "DD-API-KEY": "abc123" },
+  "otlp_interval": 5,
+  "otlp_metrics": true,
+  "otlp_logs": false,
+  "service_name": "edge-1"
+}"#;
+        let mut cfg = Config::default();
+        cfg.apply_json_str(json, "t.json").unwrap();
+        assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://127.0.0.1:4318"));
+        assert_eq!(cfg.otlp_interval, 5);
+        assert!(cfg.otlp_metrics);
+        assert!(!cfg.otlp_logs);
+        assert_eq!(cfg.service_name, "edge-1");
+        assert_eq!(
+            cfg.otlp_headers.iter().collect::<Vec<_>>(),
+            vec![("DD-API-KEY", "abc123")]
+        );
+
+        // Wrong shapes are rejected rather than silently dropping the headers.
+        let mut bad = Config::default();
+        assert!(bad
+            .apply_json_str(r#"{"otlp_headers": ["DD-API-KEY=x"]}"#, "t.json")
+            .is_err());
+        let mut bad = Config::default();
+        assert!(bad
+            .apply_json_str(r#"{"otlp_headers": {"DD-API-KEY": 5}}"#, "t.json")
+            .is_err());
+    }
+
+    #[test]
+    fn otlp_header_values_never_reach_debug_output() {
+        // The whole point of wrapping them: `{cfg:?}` is one keystroke away
+        // from a log line, and these values are vendor API keys.
+        let mut cfg = Config::default();
+        cfg.apply_json_str(r#"{"otlp_headers": {"DD-API-KEY": "s3cret"}}"#, "t.json")
+            .unwrap();
+        let rendered = format!("{cfg:?}");
+        assert!(!rendered.contains("s3cret"), "{rendered}");
+        // The name still shows, which is what an operator needs to debug a
+        // rejected export.
+        assert!(rendered.contains("DD-API-KEY"), "{rendered}");
+    }
+
+    #[test]
+    fn otlp_protocol_is_validated_once_for_every_layer() {
+        assert!(check_otlp_protocol("http").is_ok());
+        assert!(check_otlp_protocol("HTTP/protobuf").is_ok());
+
+        // grpc is the value people reach for first, and the reason it fails is
+        // a missing build option, not a typo — so it says so.
+        let err = check_otlp_protocol("grpc").unwrap_err().to_string();
+        assert!(err.contains("HTTP/protobuf only"), "{err}");
+        assert!(err.contains("4318"), "{err}");
+
+        assert!(check_otlp_protocol("carrier-pigeon").is_err());
+    }
+
+    #[test]
+    fn otlp_header_pairs_reject_malformed_input() {
+        // A dropped API key is indistinguishable from an auth failure at the
+        // collector, so a bad pair is an error, not a skip.
+        assert!(OtlpHeaders::parse_pairs(["no-equals-sign"]).is_err());
+        assert!(OtlpHeaders::parse_pairs(["=value"]).is_err());
+        // Blank entries (a trailing comma) are fine.
+        assert_eq!(
+            OtlpHeaders::parse_pairs(["a=b", "", "  "])
+                .unwrap()
+                .iter()
+                .count(),
+            1
+        );
+        // A value containing '=' survives: base64 padding is common in tokens.
+        assert_eq!(
+            OtlpHeaders::parse_pairs(["Authorization=Basic dXNlcg=="])
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![("Authorization", "Basic dXNlcg==")]
+        );
     }
 
     #[test]

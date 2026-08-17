@@ -166,13 +166,21 @@ below rather than inline in the example file. A full file looks like:
   "maximum_qos": 2,
   "retain_available": true,
   "topic_alias_maximum": 16,
-  "server_keep_alive": 60
+  "server_keep_alive": 60,
+
+  "otlp_endpoint": "http://127.0.0.1:4318",
+  "otlp_headers": { "DD-API-KEY": "..." },
+  "otlp_interval": 60,
+  "service_name": "pulsemq"
 }
 ```
 
 `tls_client_ca` enables mutual TLS; `ws_tls_cert`/`ws_tls_key` put the
 WebSocket listener behind TLS (`wss://`); `server_keep_alive` overrides the
-client's Keep Alive. Omit any key to keep its default.
+client's Keep Alive; the `otlp_*` keys turn on telemetry export and need a
+build with `--features otel` (see
+[OTLP telemetry export](#otlp-telemetry-export-push)). Omit any key to keep its
+default.
 
 ## Command-line options
 
@@ -335,7 +343,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
 ```
 
 ```
-$SYS/broker/version PulseMQ 1.1.1
+$SYS/broker/version PulseMQ 1.2.0
 $SYS/broker/uptime 15 seconds
 $SYS/broker/clients/connected 1
 $SYS/broker/clients/total 1
@@ -370,6 +378,83 @@ scrape_configs:
     static_configs:
       - targets: ['127.0.0.1:9001']
 ```
+
+### OTLP telemetry export (push)
+
+`/metrics` and `$SYS` both wait to be *read*. On an edge box or a Pi there is
+often nothing scraping it and no route in, so PulseMQ can also **push** its
+metrics and logs to an OpenTelemetry (OTLP) endpoint. One exporter reaches an
+OTel Collector, Datadog, Splunk Observability, Grafana Cloud or Honeycomb —
+and the Collector fans out to anything else.
+
+This is behind a **non-default Cargo feature**, because the OpenTelemetry
+dependency tree is large and the default binary and image should stay lean:
+
+```bash
+cargo build --release --features otel
+```
+
+A build without the feature still parses and validates the `otlp_*` config
+keys, so one config file works against both — and warns loudly at startup if
+export is configured but not compiled in, rather than silently doing nothing.
+
+```json
+{
+  "otlp_endpoint": "http://127.0.0.1:4318",
+  "otlp_protocol": "http",
+  "otlp_headers": { "DD-API-KEY": "..." },
+  "otlp_interval": 60,
+  "otlp_metrics": true,
+  "otlp_logs": true,
+  "service_name": "pulsemq"
+}
+```
+
+- **`otlp_endpoint`** is a *base* URL; `/v1/metrics` and `/v1/logs` are
+  appended. Unset — the default — disables export entirely.
+- **Metrics** are the same series `/metrics` renders, from the same
+  `Snapshot`, so the two surfaces cannot disagree. Counters are exported
+  **without** the `_total` suffix, which is the OpenTelemetry convention: a
+  Collector's Prometheus exporter appends it, and sending
+  `mqtt_packets_received_total` would arrive as `..._total_total`.
+  `mqtt_sessions_total` and `mqtt_subscriptions_total` keep their names — they
+  are gauges that merely end in `_total`.
+- **`mqtt_build_info`** has no OTLP equivalent (a constant-1 gauge carrying a
+  label is a Prometheus idiom); the version is exported as `service.version`
+  on the resource instead.
+- **Logs** are every `tracing` event, with structured fields intact.
+  `RUST_LOG` filters exported records exactly as it filters the console.
+- **Only OTLP over HTTP/protobuf** is compiled in — port 4318, not 4317.
+  Setting `otlp_protocol` to `grpc` is a startup error that says so.
+- `OTEL_EXPORTER_OTLP_*` environment variables are deliberately **not** read,
+  so there is one source of truth for the configuration.
+
+Try it against a local Collector:
+
+```bash
+docker run --rm -p 4318:4318 \
+  -v "$PWD/otelcol.yaml:/etc/otelcol/config.yaml:ro" \
+  otel/opentelemetry-collector --config /etc/otelcol/config.yaml
+
+cargo run --features otel -- --otlp-endpoint http://127.0.0.1:4318 --otlp-interval 5
+```
+
+```yaml
+# otelcol.yaml
+receivers: { otlp: { protocols: { http: { endpoint: 0.0.0.0:4318 } } } }
+exporters: { debug: { verbosity: detailed } }
+service:
+  pipelines:
+    metrics: { receivers: [otlp], exporters: [debug] }
+    logs:    { receivers: [otlp], exporters: [debug] }
+```
+
+**The exporter cannot slow the broker down.** It runs on the SDK's own threads
+with a blocking HTTP client, so a wedged collector never occupies a Tokio
+worker; the log queue is bounded and drops records rather than applying
+backpressure; and export failures are reported on the console but excluded
+from the exported logs, so a dead collector cannot feed itself an endless
+loop of its own error messages.
 
 ### MCP server
 
@@ -429,6 +514,13 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_RETAIN_AVAILABLE` | `true` | Whether retained messages are supported |
 | `MQTT_TOPIC_ALIAS_MAXIMUM` | `16` | Topic Alias Maximum granted to clients |
 | `MQTT_SERVER_KEEP_ALIVE` | _(unset)_ | Override the client's Keep Alive (s) |
+| `MQTT_OTLP_ENDPOINT` | _(unset)_ | OTLP collector base URL; unset disables export (needs `--features otel`) |
+| `MQTT_OTLP_PROTOCOL` | `http` | OTLP transport; this build is HTTP/protobuf only |
+| `MQTT_OTLP_HEADERS` | _(unset)_ | Export headers, `NAME=VALUE,NAME=VALUE` (vendor API keys) |
+| `MQTT_OTLP_INTERVAL` | `60` | Metric export interval (s) |
+| `MQTT_OTLP_METRICS` | `true` | Export metrics |
+| `MQTT_OTLP_LOGS` | `true` | Export logs |
+| `MQTT_SERVICE_NAME` | `pulsemq` | `service.name` on the exported OTLP resource |
 | `RUST_LOG` | `info` | Log level (`tracing` filter) |
 
 ### Transports

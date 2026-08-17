@@ -23,6 +23,7 @@ pub mod error;
 pub mod framing;
 pub mod message;
 pub mod metrics;
+pub mod otel;
 pub mod packet;
 pub mod server;
 pub mod storage;
