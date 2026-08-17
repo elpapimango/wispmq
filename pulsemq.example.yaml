@@ -37,6 +37,9 @@ db_path: "mqtt_broker.db"
 max_packet_size: 1048576             # bytes
 receive_maximum: 64                  # concurrent unacked QoS>0 publications
 max_session_expiry: 3600             # seconds
+max_queued_messages: 1000            # QoS>0 messages held per offline session
+                                     # (0 = unlimited; unbounded queues let an
+                                     #  offline durable subscriber exhaust RAM)
 
 # --- Protocol capabilities (advertised to clients in CONNACK) ---
 maximum_qos: 2                       # 0, 1, or 2

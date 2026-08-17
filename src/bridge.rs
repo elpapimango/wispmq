@@ -66,7 +66,11 @@ pub struct BridgeTopic {
 }
 
 /// Configuration for one bridge to a remote broker.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented by hand to redact `password`; the derived version
+/// would print the remote broker's credentials into any log line or error that
+/// formats a config.
+#[derive(Clone)]
 pub struct BridgeConfig {
     pub name: String,
     /// `scheme://host[:port][/path]`; scheme is tcp|tls|ws|wss (mqtt/mqtts alias
@@ -82,6 +86,25 @@ pub struct BridgeConfig {
     pub tls_key: Option<String>,
     pub tls_insecure: bool,
     pub topics: Vec<BridgeTopic>,
+}
+
+impl std::fmt::Debug for BridgeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BridgeConfig")
+            .field("name", &self.name)
+            .field("address", &self.address)
+            .field("client_id", &self.client_id)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("keepalive", &self.keepalive)
+            .field("protocol_version", &self.protocol_version)
+            .field("tls_ca", &self.tls_ca)
+            .field("tls_cert", &self.tls_cert)
+            .field("tls_key", &self.tls_key)
+            .field("tls_insecure", &self.tls_insecure)
+            .field("topics", &self.topics)
+            .finish()
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -209,6 +232,20 @@ pub async fn run(broker: Broker, cfg: BridgeConfig) {
         }
     };
 
+    // Certificate verification off means any host able to intercept the
+    // connection can impersonate the remote broker and read or inject every
+    // forwarded message. It is a testing aid, so say so loudly and on every
+    // start rather than letting it hide in a config file.
+    if cfg.tls_insecure && endpoint.is_tls() {
+        tracing::warn!(
+            bridge = %cfg.name,
+            address = %cfg.address,
+            "tls_insecure is set: the remote broker's certificate is NOT verified. \
+             This bridge is exposed to man-in-the-middle attacks and must not be \
+             used in production"
+        );
+    }
+
     let base = Duration::from_secs(1);
     let max = Duration::from_secs(60);
     let mut delay = base;
@@ -250,6 +287,12 @@ enum Transport {
 }
 
 impl Endpoint {
+    /// Whether this endpoint negotiates TLS (and so is affected by
+    /// `tls_insecure`).
+    fn is_tls(&self) -> bool {
+        matches!(self.transport, Transport::Tls | Transport::Wss)
+    }
+
     fn parse(address: &str) -> Result<Endpoint> {
         let (scheme, rest) = address.split_once("://").ok_or_else(|| {
             cfg(format!(

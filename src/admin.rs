@@ -139,7 +139,7 @@ fn authorized(broker: &Broker, req: &Request) -> bool {
         Some(expected) => req
             .bearer
             .as_deref()
-            .map(|got| tokens_match(got, expected))
+            .map(|got| tokens_match(got, expected.expose()))
             .unwrap_or(false),
     }
 }
@@ -393,6 +393,7 @@ fn call_tool(broker: &Broker, params: Option<&Value>) -> std::result::Result<Val
                 "bytes_sent": s.bytes_sent,
                 "publish_received": s.publish_received,
                 "publish_delivered": s.publish_delivered,
+                "publish_dropped": s.publish_dropped,
                 "bridge_forwarded_out": s.bridge_forwarded_out,
                 "bridge_forwarded_in": s.bridge_forwarded_in,
                 "clients_connected": s.clients_connected,

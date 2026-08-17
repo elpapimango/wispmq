@@ -21,6 +21,9 @@ pub struct Metrics {
     pub publish_received: AtomicU64,
     /// PUBLISH deliveries fanned out to subscribers.
     pub publish_delivered: AtomicU64,
+    /// Messages dropped instead of queued because an offline session's queue
+    /// was at `max_queued_messages`.
+    pub publish_dropped: AtomicU64,
     /// Messages forwarded out to a bridged remote broker.
     pub bridge_forwarded_out: AtomicU64,
     /// Messages received from a bridged remote and injected locally.
@@ -62,6 +65,7 @@ pub struct Snapshot {
     pub bytes_sent: u64,
     pub publish_received: u64,
     pub publish_delivered: u64,
+    pub publish_dropped: u64,
     pub bridge_forwarded_out: u64,
     pub bridge_forwarded_in: u64,
     // Gauges.
@@ -115,6 +119,11 @@ impl Snapshot {
             "mqtt_publish_delivered_total",
             "Total PUBLISH deliveries to subscribers.",
             self.publish_delivered,
+        );
+        counter(
+            "mqtt_publish_dropped_total",
+            "Total messages dropped because an offline session's queue was full.",
+            self.publish_dropped,
         );
         counter(
             "mqtt_bridge_forwarded_out_total",

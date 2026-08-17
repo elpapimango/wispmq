@@ -264,6 +264,7 @@ impl Broker {
             bytes_sent: Metrics::get(&m.bytes_sent),
             publish_received: Metrics::get(&m.publish_received),
             publish_delivered: Metrics::get(&m.publish_delivered),
+            publish_dropped: Metrics::get(&m.publish_dropped),
             bridge_forwarded_out: Metrics::get(&m.bridge_forwarded_out),
             bridge_forwarded_in: Metrics::get(&m.bridge_forwarded_in),
             clients_connected,
@@ -937,10 +938,17 @@ impl Broker {
             Outgoing::Control(Box::new(Packet::Suback(suback))),
         );
 
+        let max_queued = self.inner.config.max_queued_messages as usize;
+        let mut dropped = 0u64;
         for (msg, eff_qos, ids) in retained_to_send {
             if let Some(session) = st.sessions.get_mut(client_id) {
-                deliver_to_session(session, &msg, eff_qos, true, &ids);
+                if deliver_to_session(session, &msg, eff_qos, true, &ids, max_queued) {
+                    dropped += 1;
+                }
             }
+        }
+        if dropped > 0 {
+            Metrics::add(&self.inner.metrics.publish_dropped, dropped);
         }
 
         Action::Continue
@@ -1014,6 +1022,7 @@ impl Broker {
     /// session. `epoch` guards against acting on a session already taken over.
     pub fn handle_connection_closed(&self, client_id: &str, epoch: u64, publish_will: bool) {
         let mut will_to_fire: Option<(Message, u32)> = None;
+        let mut will_owner = String::new();
         let expiry: u32;
 
         {
@@ -1030,6 +1039,10 @@ impl Broker {
 
             if publish_will {
                 if let Some(will) = session.will.take() {
+                    will_owner = session
+                        .identity
+                        .clone()
+                        .unwrap_or_else(|| ANONYMOUS.to_string());
                     will_to_fire = Some(will);
                 }
             } else {
@@ -1041,7 +1054,7 @@ impl Broker {
 
         // Publish the Will (respecting Will Delay Interval, 3.1.3.2.2).
         if let Some((message, delay)) = will_to_fire {
-            self.schedule_will(client_id.to_string(), epoch, message, delay);
+            self.schedule_will(client_id.to_string(), epoch, message, delay, will_owner);
         }
 
         // Handle session expiry.
@@ -1058,7 +1071,14 @@ impl Broker {
         }
     }
 
-    fn schedule_will(&self, client_id: String, epoch: u64, message: Message, delay: u32) {
+    fn schedule_will(
+        &self,
+        client_id: String,
+        epoch: u64,
+        message: Message,
+        delay: u32,
+        owner: String,
+    ) {
         let broker = self.clone();
         tokio::spawn(async move {
             if delay > 0 {
@@ -1071,6 +1091,23 @@ impl Broker {
                     }
                 }
             }
+
+            // Re-check authorization at fire time. The Will was authorized at
+            // CONNECT, but an arbitrary amount of time (plus the Will Delay)
+            // may have passed, during which a SIGHUP reload can have revoked
+            // the identity's right to publish here. That reload also
+            // disconnects the affected client — which is precisely what fires
+            // the Will — so without this check, revoking a permission would
+            // *cause* the publish it was meant to prevent.
+            if !broker.acl().can_publish(&owner, &message.topic) {
+                tracing::info!(
+                    identity = %owner,
+                    topic = %message.topic,
+                    "dropping Will message: identity is no longer authorized to publish there"
+                );
+                return;
+            }
+
             let mut st = broker.lock();
             // Store retained Will if flagged.
             if message.retain {
@@ -1198,10 +1235,24 @@ impl Broker {
 
         let matched = !plans.is_empty();
         Metrics::add(&self.inner.metrics.publish_delivered, plans.len() as u64);
+        let max_queued = self.inner.config.max_queued_messages as usize;
+        let mut dropped = 0u64;
         for plan in plans {
             if let Some(session) = st.sessions.get_mut(&plan.client_id) {
-                deliver_to_session(session, message, plan.qos, plan.retain, &plan.sub_ids);
+                if deliver_to_session(
+                    session,
+                    message,
+                    plan.qos,
+                    plan.retain,
+                    &plan.sub_ids,
+                    max_queued,
+                ) {
+                    dropped += 1;
+                }
             }
+        }
+        if dropped > 0 {
+            Metrics::add(&self.inner.metrics.publish_dropped, dropped);
         }
         matched
     }
@@ -1228,15 +1279,22 @@ fn message_from_will(w: &crate::packet::Will) -> Message {
 }
 
 /// Deliver a single message to one session, applying its QoS state machine.
+///
+/// `max_queued` bounds the offline queue (0 = unlimited). Returns `true` when a
+/// message had to be dropped to stay within that bound, so the caller can count
+/// it.
+#[must_use]
 fn deliver_to_session(
     session: &mut Session,
     message: &Message,
     qos: QoS,
     retain: bool,
     sub_ids: &[u32],
-) {
+    max_queued: usize,
+) -> bool {
+    let mut dropped = false;
     if message.is_expired() {
-        return;
+        return dropped;
     }
     match qos {
         QoS::AtMostOnce => {
@@ -1261,10 +1319,19 @@ fn deliver_to_session(
                     if let Some(tx) = &session.out {
                         let _ = tx.send(Outgoing::Send(Box::new(publish)));
                     }
-                    return;
+                    return dropped;
                 }
             }
-            // Offline or window full: queue for later.
+            // Offline or window full: queue for later, up to the configured
+            // bound. An unbounded queue lets a durable subscriber to a busy
+            // topic consume memory for the whole session-expiry window while
+            // disconnected, which exhausts a small host. Dropping the oldest
+            // keeps the most recent state, which is what a reconnecting client
+            // usually wants.
+            if max_queued > 0 && session.queue.len() >= max_queued {
+                session.queue.pop_front();
+                dropped = true;
+            }
             session.queue.push_back(Pending {
                 message: message.clone(),
                 qos,
@@ -1273,6 +1340,7 @@ fn deliver_to_session(
             });
         }
     }
+    dropped
 }
 
 /// Send queued messages while the inflight window has room and the client is

@@ -155,6 +155,7 @@ db_path: "mqtt_broker.db"
 max_packet_size: 1048576
 receive_maximum: 64
 max_session_expiry: 3600
+max_queued_messages: 1000          # per offline session; 0 = unlimited
 
 # advertised in CONNACK
 maximum_qos: 2                       # 0, 1, or 2
@@ -202,6 +203,7 @@ STORAGE & LIMITS:
     --max-packet-size <BYTES>     Maximum accepted packet size [MQTT_MAX_PACKET_SIZE]
     --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
     --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
+    --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
 PROTOCOL CAPABILITIES:
     --maximum-qos <0|1|2>         Highest QoS supported [MQTT_MAXIMUM_QOS]
     --retain-available <BOOL>     Retained messages supported [MQTT_RETAIN_AVAILABLE]
@@ -322,6 +324,7 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_MAX_PACKET_SIZE` | `1048576` | Max accepted packet size (bytes) |
 | `MQTT_RECEIVE_MAXIMUM` | `64` | Server Receive Maximum |
 | `MQTT_MAX_SESSION_EXPIRY` | `3600` | Cap on Session Expiry Interval (s) |
+| `MQTT_MAX_QUEUED_MESSAGES` | `1000` | Max messages queued per offline session; `0` = unlimited |
 | `MQTT_MAXIMUM_QOS` | `2` | Highest QoS the server supports (0/1/2) |
 | `MQTT_RETAIN_AVAILABLE` | `true` | Whether retained messages are supported |
 | `MQTT_TOPIC_ALIAS_MAXIMUM` | `16` | Topic Alias Maximum granted to clients |

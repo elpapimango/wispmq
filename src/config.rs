@@ -30,6 +30,7 @@ const KNOWN_YAML_KEYS: &[&str] = &[
     "max_packet_size",
     "receive_maximum",
     "max_session_expiry",
+    "max_queued_messages",
     "maximum_qos",
     "retain_available",
     "topic_alias_maximum",
@@ -43,6 +44,33 @@ const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.yaml", "pulsemq.yml"];
 /// Crate version, surfaced by `--version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// A configuration value that must never reach a log line or error message.
+///
+/// `Config` derives `Debug` and is passed around freely, so any plaintext
+/// secret stored in it is one `{config:?}` away from being written to disk or
+/// shipped to a log aggregator. Wrapping it means the redaction cannot be
+/// forgotten when a new field is added — the derive stays correct by
+/// construction. Read the value with [`Secret::expose`] at the point of use.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Secret(value.into())
+    }
+
+    /// Borrow the underlying value. Named to make each use site conspicuous.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Address the MQTT TCP listener binds to.
@@ -52,7 +80,7 @@ pub struct Config {
     pub admin_addr: SocketAddr,
     /// Optional bearer token required on the protected admin endpoints
     /// (`/metrics`, `/mcp`). When `None`, those endpoints are unauthenticated.
-    pub admin_token: Option<String>,
+    pub admin_token: Option<Secret>,
     /// PEM certificate chain / private key for TLS on the MQTT port. When both
     /// are set the MQTT listener speaks TLS (MQTT-over-TLS, typically port 8883).
     pub tls_cert: Option<String>,
@@ -104,6 +132,11 @@ pub struct Config {
     pub server_keep_alive: Option<u16>,
     /// Maximum Session Expiry Interval the server will retain state for.
     pub max_session_expiry: u32,
+    /// Cap on messages held for an offline persistent session. Without a cap a
+    /// durable subscriber to a busy topic accumulates messages in memory for
+    /// the whole session-expiry window, which is a memory-exhaustion DoS on a
+    /// small host. `0` means unlimited (the pre-1.0 behaviour).
+    pub max_queued_messages: u32,
     /// Broker-to-broker forwarding bridges (config-file only). See `bridge`.
     pub bridges: Vec<crate::bridge::BridgeConfig>,
     /// Path of the YAML config file that was loaded, if any (informational).
@@ -137,6 +170,7 @@ impl Default for Config {
             topic_alias_maximum: 16,
             server_keep_alive: None,
             max_session_expiry: 3600,
+            max_queued_messages: 1000,
             bridges: Vec::new(),
             config_file: None,
         }
@@ -165,7 +199,7 @@ impl Config {
             }
         }
         if let Some(v) = non_empty_env("MQTT_ADMIN_TOKEN") {
-            self.admin_token = Some(v);
+            self.admin_token = Some(Secret::new(v));
         }
         overlay_opt(&mut self.tls_cert, non_empty_env("MQTT_TLS_CERT"));
         overlay_opt(&mut self.tls_key, non_empty_env("MQTT_TLS_KEY"));
@@ -214,6 +248,11 @@ impl Config {
         if let Some(v) = non_empty_env("MQTT_MAX_SESSION_EXPIRY") {
             if let Ok(n) = v.parse() {
                 self.max_session_expiry = n;
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_MAX_QUEUED_MESSAGES") {
+            if let Ok(n) = v.parse() {
+                self.max_queued_messages = n;
             }
         }
         if let Some(q) = non_empty_env("MQTT_MAXIMUM_QOS")
@@ -335,7 +374,7 @@ impl Config {
 
         // String / path options.
         if let Some(v) = y_str(doc, "admin_token", source)? {
-            self.admin_token = Some(v);
+            self.admin_token = Some(Secret::new(v));
         }
         if let Some(v) = y_str(doc, "tls_cert", source)? {
             self.tls_cert = Some(v);
@@ -383,6 +422,9 @@ impl Config {
         }
         if let Some(n) = y_u32(doc, "max_session_expiry", source)? {
             self.max_session_expiry = n;
+        }
+        if let Some(n) = y_u32(doc, "max_queued_messages", source)? {
+            self.max_queued_messages = n;
         }
         if let Some(n) = y_i64(doc, "receive_maximum", source)? {
             self.receive_maximum = u16::try_from(n).map_err(|_| {
@@ -583,6 +625,7 @@ STORAGE & LIMITS:
     --receive-maximum <N>         Server Receive Maximum [MQTT_RECEIVE_MAXIMUM]
                                   (default 64)
     --max-session-expiry <SECS>   Cap on Session Expiry Interval [MQTT_MAX_SESSION_EXPIRY]
+    --max-queued-messages <N>     Max queued messages per offline session, 0=unlimited [MQTT_MAX_QUEUED_MESSAGES]
                                   (default 3600)
 
 PROTOCOL CAPABILITIES (advertised in CONNACK):
@@ -651,7 +694,7 @@ impl Config {
                 "--admin-tls-cert" => self.admin_tls_cert = Some(value(&mut i)?),
                 "--admin-tls-key" => self.admin_tls_key = Some(value(&mut i)?),
                 "--admin-tls-client-ca" => self.admin_tls_client_ca = Some(value(&mut i)?),
-                "--admin-token" => self.admin_token = Some(value(&mut i)?),
+                "--admin-token" => self.admin_token = Some(Secret::new(value(&mut i)?)),
                 "--acl-file" => self.acl_path = Some(value(&mut i)?),
                 "--password-file" => self.password_file = Some(value(&mut i)?),
                 "--allow-anonymous" => {
@@ -666,6 +709,9 @@ impl Config {
                 }
                 "--max-session-expiry" => {
                     self.max_session_expiry = parse_num(&value(&mut i)?, "--max-session-expiry")?
+                }
+                "--max-queued-messages" => {
+                    self.max_queued_messages = parse_num(&value(&mut i)?, "--max-queued-messages")?
                 }
                 "--maximum-qos" => {
                     self.maximum_qos = parse_qos_arg(&value(&mut i)?, "--maximum-qos")?
@@ -777,6 +823,7 @@ db_path: "/data/broker.db"
 max_packet_size: 2097152
 receive_maximum: 100
 max_session_expiry: 600
+max_queued_messages: 42
 "#;
         let mut cfg = Config::default();
         cfg.apply_yaml_str(yaml, "test.yaml").unwrap();
@@ -786,11 +833,40 @@ max_session_expiry: 600
             Some("0.0.0.0:8080")
         );
         assert_eq!(cfg.tls_cert.as_deref(), Some("server.pem"));
-        assert_eq!(cfg.admin_token.as_deref(), Some("sekret"));
+        assert_eq!(cfg.admin_token.as_ref().map(Secret::expose), Some("sekret"));
         assert_eq!(cfg.db_path, "/data/broker.db");
         assert_eq!(cfg.max_packet_size, 2_097_152);
         assert_eq!(cfg.receive_maximum, 100);
         assert_eq!(cfg.max_session_expiry, 600);
+        assert_eq!(cfg.max_queued_messages, 42);
+    }
+
+    #[test]
+    fn queue_bound_defaults_on_and_cli_overrides_file() {
+        // The cap must be on by default: 1.0.0 shipped with an unbounded
+        // offline queue, which is the memory-exhaustion path this closes.
+        assert_eq!(Config::default().max_queued_messages, 1000);
+
+        let mut cfg = Config::default();
+        cfg.apply_yaml_str("max_queued_messages: 5\n", "t.yaml")
+            .unwrap();
+        assert_eq!(cfg.max_queued_messages, 5);
+
+        // CLI still wins over the file.
+        let cfg = match cfg
+            .apply_args(&["--max-queued-messages".into(), "7".into()])
+            .unwrap()
+        {
+            Startup::Run(c) => *c,
+            Startup::Exit => panic!("unexpected exit"),
+        };
+        assert_eq!(cfg.max_queued_messages, 7);
+
+        // 0 is a legal opt-out, not a parse error.
+        let mut cfg = Config::default();
+        cfg.apply_yaml_str("max_queued_messages: 0\n", "t.yaml")
+            .unwrap();
+        assert_eq!(cfg.max_queued_messages, 0);
     }
 
     #[test]

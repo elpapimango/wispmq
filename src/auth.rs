@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::OnceLock;
 
 use ring::pbkdf2;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -63,13 +64,42 @@ impl Credentials {
         self.users.len()
     }
 
-    /// Verify a username / password pair in constant time.
+    /// Verify a username / password pair.
+    ///
+    /// A PBKDF2 derivation is always performed, even when the username is not
+    /// in the store. Returning early on an unknown user would make a bad
+    /// username resolve in nanoseconds while a bad password costs the full
+    /// iteration count (~200k iterations, tens of milliseconds) — a difference
+    /// an attacker can measure remotely to enumerate valid usernames. The
+    /// decoy keeps both paths on the same order of magnitude.
     pub fn verify(&self, username: &str, password: &[u8]) -> bool {
-        match self.users.get(username) {
-            Some(s) => pbkdf2::verify(PBKDF2_ALG, s.iterations, &s.salt, password, &s.hash).is_ok(),
-            None => false,
-        }
+        let (stored, known) = match self.users.get(username) {
+            Some(s) => (s, true),
+            None => (decoy(), false),
+        };
+        let matched = pbkdf2::verify(
+            PBKDF2_ALG,
+            stored.iterations,
+            &stored.salt,
+            password,
+            &stored.hash,
+        )
+        .is_ok();
+        // Non-short-circuiting `&`: never branch away before the work is done.
+        matched & known
     }
+}
+
+/// A fixed credential used only to spend the same work as a real verification
+/// when the username is unknown. The derived hash is all-zero, so verification
+/// against it fails; only its cost matters, and the result is discarded.
+fn decoy() -> &'static Stored {
+    static DECOY: OnceLock<Stored> = OnceLock::new();
+    DECOY.get_or_init(|| Stored {
+        iterations: NonZeroU32::new(DEFAULT_ITERATIONS).expect("DEFAULT_ITERATIONS is nonzero"),
+        salt: vec![0u8; SALT_LEN],
+        hash: vec![0u8; HASH_LEN],
+    })
 }
 
 /// Hash a password into a storable `pbkdf2_sha256$iters$salt$hash` string.
@@ -163,6 +193,37 @@ mod tests {
         assert!(parse_entry("u:md5$1$aa$bb").is_err());
         assert!(parse_entry("u:pbkdf2_sha256$0$aa$bb").is_err());
         assert!(parse_entry("u:pbkdf2_sha256$1$zz$bb").is_err());
+    }
+
+    #[test]
+    fn unknown_user_costs_the_same_as_a_wrong_password() {
+        // Guards the username-enumeration fix: an unknown username must not
+        // resolve dramatically faster than a known one with a bad password.
+        use std::time::Instant;
+        let entry = format_entry("alice", b"s3cr3t");
+        let creds = {
+            let mut users = HashMap::new();
+            let (u, s) = parse_entry(&entry).unwrap();
+            users.insert(u, s);
+            Credentials { users }
+        };
+
+        let t0 = Instant::now();
+        assert!(!creds.verify("alice", b"wrong-password"));
+        let known = t0.elapsed();
+
+        let t1 = Instant::now();
+        assert!(!creds.verify("nonexistent-user", b"wrong-password"));
+        let unknown = t1.elapsed();
+
+        // Both run the same iteration count, so allow generous scheduling
+        // noise but reject the old behaviour (which was orders of magnitude
+        // apart -- a hashmap miss versus 200k PBKDF2 iterations).
+        assert!(
+            unknown * 10 > known,
+            "unknown-user verify ({unknown:?}) was far faster than \
+             known-user verify ({known:?}): username enumeration is possible"
+        );
     }
 
     #[test]
