@@ -8,6 +8,24 @@ warnings`, and `cargo test`, and add tests for new behavior.
 
 When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 
+## Status at a glance
+
+| # | Item | State |
+|---|------|-------|
+| 1 | Forwarding (broker-to-broker bridge) | ✅ done |
+| 2 | Metrics — `$SYS` + Prometheus | ✅ done (`load/*` averages skipped) |
+| 3 | Config file YAML → JSON | ✅ done |
+| 5A | No-panic / error-handling audit | ✅ done |
+| 5B | Security review | ✅ done |
+| **4** | **`clap` for CLI parsing** | **next** |
+| 5C | Refactor & optimize | open |
+| 6 | Telemetry/log export (OTLP) | open |
+
+**Start with item 4.** It is self-contained and shrinks `config.rs`, which makes
+5C's split of that file mostly unnecessary. Item 6 should reuse the existing
+`metrics::Snapshot` rather than building a parallel counter set, so it benefits
+from item 2 already being done.
+
 ---
 
 ## 1. Message forwarding (broker-to-broker bridge) — ✅ DONE
@@ -309,12 +327,36 @@ support, and less bespoke string-matching to maintain.
 
 ---
 
-## 5. Full code audit — refactor, optimize, harden error handling
+## 5. Full code audit — Pass A ✅, Pass B ✅, Pass C open
 
-A sweep over the whole crate (~6.1k lines, 19 modules) now that the feature set
-is settled. Three passes, ideally three commits, so a regression is easy to
-bisect. **Behavior must not change** except where a genuine bug is fixed — every
-fix gets a test that fails before it.
+A sweep over the whole crate, in three passes so a regression is easy to bisect.
+**Behavior must not change** except where a genuine bug is fixed — every fix gets
+a test that fails before it.
+
+**Pass A (error handling) — ✅ DONE** (commit `f7ee7d3`). The decoder held up:
+`Reader::ensure` fronts every buffer access, `varint` cannot overflow, and
+framing checks `max_packet_size` *before* allocating. `tests/malformed.rs` now
+proves the no-panic property empirically rather than by inspection. Fixed: a
+silent persistence-loss path (a dead storage thread discarded every write
+unreported), a `len as u16` truncation in `Writer` that would have desynced the
+peer's framing, and an `unreachable!()` that a refactor could have made live.
+The mutex-poisoning policy is now documented as deliberate fail-fast.
+
+**Pass B (security) — ✅ DONE** (commit `0bc7bb4`). Four findings, each with a
+regression test: a PBKDF2 **username-enumeration timing leak** (unknown users
+returned instantly, known users cost 200k iterations); a **Will authorization
+bypass** — the Will was authorized at CONNECT but published unchecked at
+disconnect, so an ACL reload revoking a permission *fired* the publish it meant
+to block; an **unbounded offline queue** (now `max_queued_messages`, default
+1000, with `mqtt_publish_dropped_total`); and **secrets in `Debug` output**
+(`admin_token` is now `config::Secret`, `BridgeConfig` has a redacting `Debug`,
+and `tls_insecure` warns loudly at startup). Verified sound and left alone:
+pre-allocation size enforcement, CONNECT/keep-alive timeouts, and the
+already-constant-time admin token compare.
+
+**Pass C is the remaining work** — see below. Note `config.rs` shrank with the
+JSON move and will shrink further with item 4, so do item 4 first and re-scope
+C to `broker/mod.rs` and the routing hot path.
 
 ### Pass A — correctness & error handling (highest value)
 - **No panics on the network path.** Audit every `unwrap()`/`expect()`/slice

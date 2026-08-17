@@ -19,7 +19,10 @@ project.
 ## Project history & status
 
 Current status: **v1.0.0 released** (tag `v1.0.0`, GitHub Release, and
-`ghcr.io/elpapimango/pulsemq:1.0.0`). Everything below is done and on `main`;
+`ghcr.io/elpapimango/pulsemq:1.0.0`), plus unreleased post-1.0.0 work on `main`
+(forwarding, the 5A/5B audit, JSON config, `$SYS` metrics — see "Done since
+1.0.0" below). `main` is therefore ahead of the `1.0.0` tag and image; the
+crate version is still `1.0.0`, so **bump it when cutting the next release**.
 CI (`ci.yml`) and image builds (`docker.yml`) are green. `git log` has the
 detail — this is the map.
 
@@ -55,6 +58,16 @@ No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
 (re-tag/rebuild to make it single-manifest); mutual-TLS on the *admin* port and
 WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
 SSE is not implemented (`GET /mcp` → 405).
+
+**Expected behaviour that reads like a bug** (don't "fix" these):
+- `$SYS` deliveries count as real traffic, so `packets_sent`/`bytes_sent`/
+  `mqtt_publish_sent_total` climb steadily whenever something subscribes to
+  `$SYS/#` (~55 topics per `sys_interval`). mosquitto behaves the same way. Set
+  `sys_interval: 0` if that noise matters.
+- `Writer::put_utf8`/`put_binary` clamp at 65535 bytes instead of returning an
+  error. Unreachable today (every such field arrives u16-length-prefixed), and
+  clamping beats a wrapping length prefix, which would desync the peer's framing
+  for every subsequent packet.
 
 **Planned work is in [`TODO.md`](TODO.md)** — pick the top item.
 
@@ -190,12 +203,28 @@ each layer — extend them.
 
 ## Tests
 
-- Unit tests live in-module (`topic`, `acl`, `config`).
-- `tests/interop.rs` — TCP round trips using the crate's own codec.
+47 tests. Unit tests live in-module (`topic`, `acl`, `config`, `auth`,
+`storage`); integration suites are in `tests/`:
+
+- `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
   the wss cert is generated in-test with `rcgen` (dev-dep) so tests are
-  self-contained/CI-safe. Bind an ephemeral port with `TcpListener::bind(":0")`,
-  read the addr, drop, then hand it to the broker.
+  self-contained/CI-safe.
+- `tests/bridge.rs` — two in-process brokers bridged; delivery both ways plus
+  reconnect when the remote starts late.
+- `tests/malformed.rs` — **the no-panic guard.** Truncations, byte mutations,
+  every type/flag nibble, lying Remaining Lengths, pathological VBIs, all
+  decoded under v3.1/v3.1.1/v5. Keep it passing when touching the codec; if a
+  change here fails, a remote peer can crash the broker.
+- `tests/limits.rs` — the offline-queue bound (`max_queued_messages`), including
+  that `0` still means unlimited.
+- `tests/sysinfo.rs` — `$SYS` publishing/retention, `sys_interval: 0`, that `#`
+  does not match `$SYS`, that clients cannot publish there, and that the
+  Prometheus and `$SYS` renderings of the same `Snapshot` agree.
+
+Pattern for a broker-backed test: bind an ephemeral port with
+`TcpListener::bind("127.0.0.1:0")`, read the addr, drop the listener, then hand
+the addr to the broker. Use `Storage::null()` to avoid touching a real DB.
 
 ## Environment gotchas
 
@@ -241,13 +270,21 @@ Notes for picking up in a new session/machine:
   `passwd` credential file, and `*.db` state — all regenerable. Cert-gen
   commands are in the README (TLS section) and `tests/websocket.rs` generates a
   wss cert in-test via `rcgen`, so the automated suite is self-contained.
+- **The GitHub repo is PRIVATE** (made private 2026-08-17). A fresh clone needs
+  an authenticated `gh auth login` / credential helper; the README badges will
+  not render for anonymous viewers. The GHCR **package is still public** —
+  package visibility is managed separately from the repo, so
+  `docker pull ghcr.io/elpapimango/pulsemq` still works without auth. Make it
+  private with
+  `gh api -X PATCH /user/packages/container/pulsemq --field visibility=private`
+  (needs `write:packages`).
 - **GitHub/GHCR**: repo `elpapimango/pulsemq`; image
   `ghcr.io/elpapimango/pulsemq`. Image pushes happen only via `docker.yml`
   (workflow `GITHUB_TOKEN` has `packages: write`). Managing GHCR packages from
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (25 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (47 tests), then
   `cargo run -- --help`.
 
 ## Conventions
