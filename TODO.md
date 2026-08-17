@@ -15,15 +15,21 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 1 | Forwarding (broker-to-broker bridge) | ✅ done |
 | 2 | Metrics — `$SYS` + Prometheus | ✅ done (`load/*` averages skipped) |
 | 3 | Config file YAML → JSON | ✅ done |
+| 4 | `clap` for CLI parsing | ✅ done |
 | 5A | No-panic / error-handling audit | ✅ done |
 | 5B | Security review | ✅ done |
-| 4 | `clap` for CLI parsing | ✅ done |
 | 5C | Refactor & optimize | ✅ done (1 bullet declined) |
 | **6** | **Telemetry/log export (OTLP)** | **next** |
+| — | [Open decision: bridge send metrics](#open-decision-should-bridge-to-remote-traffic-count-in-the-packet-counters) | needs a call |
+| — | [Cut the 1.1.0 release](#pending-cut-the-110-release) | ready when wanted |
 
-**Only item 6 is left.** It should reuse the existing `metrics::Snapshot` rather
-than building a parallel counter set, so it benefits from item 2 already being
-done, and it must be feature-gated and off by default.
+**Only item 6 is left** as build work. It should reuse the existing
+`metrics::Snapshot` rather than building a parallel counter set, so it benefits
+from item 2 already being done, and it must be feature-gated and off by default.
+
+The two `—` rows are not implementation work: one is a semantics decision that
+needs a human call, the other is a release step. Both are described at the bottom
+of this file.
 
 ---
 
@@ -354,8 +360,8 @@ support, and less bespoke string-matching to maintain.
       wins over env which wins over file — `cli_beats_env_beats_file`).
 - [x] `hash-password` still works (verified live, including with a malformed
       `pulsemq.json` present, which must not block it).
-- [x] `cargo fmt`/`clippy -D warnings`/`test` green (54 tests); README +
-      CLAUDE.md updated.
+- [x] `cargo fmt`/`clippy -D warnings`/`test` green (54 tests at the time; the
+      suite has grown since); README + CLAUDE.md updated.
 
 ---
 
@@ -476,15 +482,12 @@ path to the bridge. The parts that *are* genuinely shareable are already shared:
 `framing::read_packet`/`write_packet`, the packet/codec layer, `tls::client_config`
 and `ws::client`.
 
-One observation recorded rather than acted on:
+Two things noticed here but left alone:
 - `SubRecord::to_topic_filter` has no callers, but it is public API on a public
   struct, so removing it is a breaking change rather than a drive-by cleanup.
-- The bridge writes to its remote via `write_packet` directly, so those packets
-  are not counted by `record_sent` and do not appear in the per-control-packet
-  `$SYS`/Prometheus counters (local deliveries through routing are counted).
-  Defensible either way — mosquitto counts bridge traffic in its totals — but
-  changing counter semantics moves other people's dashboards, so it needs a
-  decision, not a refactor.
+- Bridge-to-remote writes are not counted by `record_sent`. Promoted to its own
+  item at the bottom of this file: "Open decision: should bridge-to-remote
+  traffic count in the packet counters?".
 
 Original notes follow.
 
@@ -566,3 +569,59 @@ to anything else. One exporter, every backend.
       throttled warning, no impact on publish latency.
 - [ ] No secrets in exported logs.
 - [ ] Config options wired everywhere (config checklist) + README section.
+
+---
+
+## Open decision: should bridge-to-remote traffic count in the packet counters?
+
+Found while smoke-testing 1.1.0. `src/bridge.rs` writes to its remote with
+`framing::write_packet` directly, whereas the server's connection task goes
+through a `send` helper that also calls `metrics.record_sent(...)`. So:
+
+- messages the bridge delivers **locally** (through `route`) *are* counted;
+- packets the bridge sends **to the remote broker** are *not* — they are missing
+  from `packets_sent`, `bytes_sent` and every `mqtt_packet_*_sent_total` series.
+
+Both readings are defensible. Those packets go out over a *client* connection to
+another broker rather than to a subscribing client, so excluding them keeps the
+counters meaning "traffic with our clients". But mosquitto counts bridge traffic
+in its totals, and an operator watching `bytes_sent` on an edge broker whose only
+job is forwarding will see almost nothing, which is surprising.
+
+**Why it is not just fixed:** either choice changes what an existing dashboard
+means, and the counters are a documented, mosquitto-parity surface. Pick one:
+
+- **Count it** — route the bridge's writes through a helper that calls
+  `record_sent`, and note the change in the README metrics section as a behaviour
+  change (it inflates existing series for anyone running bridges).
+- **Document the exclusion** — add it to the "expected behaviour that reads like
+  a bug" list in `CLAUDE.md`, and say so in the README metrics section. Consider
+  the existing per-bridge counters (`bridge_forwarded_{in,out}`) sufficient for
+  bridge visibility.
+
+Either way, add a test asserting the chosen behaviour, because nothing currently
+pins it.
+
+---
+
+## Pending: cut the 1.1.0 release
+
+`main` is at crate version **1.1.0** and green, but the last tag is still
+`v1.0.0`. Nothing is blocking a release; it simply has not been cut.
+
+```bash
+git tag -a v1.1.0 -m "PulseMQ 1.1.0"
+git push origin v1.1.0          # this triggers docker.yml for a v* image
+gh release create v1.1.0 --generate-notes
+```
+
+It is a **minor** bump because three changes break existing consumers:
+
+- the config file is JSON, not YAML (item 3) — a `pulsemq.yaml` no longer loads;
+- `config::Startup` lost `Exit` and gained `HashPassword`, and `config::HELP` is
+  gone (item 4) — library-only, but a source break;
+- the per-control-packet metrics are `mqtt_packet_<packet>_*` (see item 2's note)
+  — dashboards scraping the old names need updating.
+
+Worth mentioning in the release notes, since they are what a user upgrading from
+`1.0.0` will hit.

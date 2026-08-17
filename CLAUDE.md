@@ -19,17 +19,18 @@ project.
 ## Project history & status
 
 Current status: the crate version is **1.1.0**, carrying the post-1.0.0 work on
-`main` (forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, clap CLI, the
-5C refactor — see "Done since 1.0.0" below). It is a **minor** bump, not a patch:
-the JSON config move, the `Startup`/`HELP` library-API changes and the
-`mqtt_packet_*` metric rename are all breaking for existing consumers. The last
-*tagged* release is still
-**v1.0.0** (tag `v1.0.0`, GitHub Release,
-`ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is
-ahead of both the tag and that image. **1.1.0 is not tagged or released yet** —
-cutting it means pushing a `v1.1.0` tag (which triggers `docker.yml`) and
-creating the GitHub Release. CI (`ci.yml`) and image builds (`docker.yml`) are
-green. `git log` has the detail — this is the map.
+`main` — forwarding, the 5A/5B audit, JSON config, `$SYS` metrics, the clap CLI
+and the 5C refactor (see "Done since 1.0.0" below). A **minor** bump rather than
+a patch, because three of those are breaking for existing consumers: the JSON
+config move, the `Startup`/`HELP` library-API changes, and the `mqtt_packet_*`
+metric rename.
+
+The last *tagged* release is still **v1.0.0** (tag `v1.0.0`, GitHub Release,
+`ghcr.io/elpapimango/pulsemq:1.0.0`), so `main` is ahead of both the tag and that
+image. **1.1.0 is not tagged or released yet** — cutting it means pushing a
+`v1.1.0` tag (which triggers `docker.yml`) and creating the GitHub Release. CI
+(`ci.yml`) and image builds (`docker.yml`) are green on `main`. `git log` has the
+detail — this is the map.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
@@ -58,17 +59,33 @@ Milestones, in order:
 13. Docker workflow set to **`provenance: false`** and the GHCR package pruned
     of orphaned untagged versions.
 
-No known open bugs. Optional follow-ups if wanted: the `1.0.0` image predates
-`provenance: false` so its index still has two attestation child manifests
-(re-tag/rebuild to make it single-manifest); mutual-TLS on the *admin* port and
-WS+mTLS work but aren't covered by automated tests; WebSocket server-initiated
-SSE is not implemented (`GET /mcp` → 405).
+**One open question, not a bug:** the bridge writes to its remote with
+`write_packet` directly, so those packets miss `record_sent` and do not appear in
+the per-control-packet `$SYS`/Prometheus counters — while messages the bridge
+delivers *locally* through routing are counted. Defensible either way (mosquitto
+counts bridge traffic in its totals), but changing counter semantics moves
+existing dashboards, so it needs a decision rather than a drive-by fix. Recorded
+in `TODO.md`.
+
+Otherwise no known open bugs. Optional follow-ups if wanted: the `1.0.0` image
+predates `provenance: false` so its index still has two attestation child
+manifests (re-tag/rebuild to make it single-manifest); mutual-TLS on the *admin*
+port and WS+mTLS work but aren't covered by automated tests; WebSocket
+server-initiated SSE is not implemented (`GET /mcp` → 405);
+`storage::SubRecord::to_topic_filter` has no callers but is public API, so
+removing it is a breaking change rather than a cleanup.
 
 **Expected behaviour that reads like a bug** (don't "fix" these):
 - `$SYS` deliveries count as real traffic, so `packets_sent`/`bytes_sent`/
   `mqtt_publish_sent_total` climb steadily whenever something subscribes to
   `$SYS/#` (~55 topics per `sys_interval`). mosquitto behaves the same way. Set
   `sys_interval: 0` if that noise matters.
+- `/metrics` carries **two** publish counter families that look duplicative:
+  `mqtt_publish_{received,sent}_total` (aggregate application messages) and
+  `mqtt_packet_publish_{received,sent}_total` (the PUBLISH entry in the
+  per-control-packet array). They are deliberately distinct series; the
+  `mqtt_packet_` prefix exists precisely because the per-packet names used to
+  collide with the aggregates and produced invalid exposition.
 - `Writer::put_utf8`/`put_binary` clamp at 65535 bytes instead of returning an
   error. Unreachable today (every such field arrives u16-length-prefixed), and
   clamping beats a wrapping length prefix, which would desync the peer's framing
