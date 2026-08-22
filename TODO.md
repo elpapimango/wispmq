@@ -25,12 +25,13 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 **The roadmap is clear.** Every numbered item is done. Anything new starts a
 fresh entry here.
 
-`main` is at crate version **1.2.0** (item 6), which is **not tagged or released
-yet** — no `v1.2.0` tag, no image, no GitHub Release. The last release is
-`v1.1.1`: tagged, image published, GitHub Release created and marked latest (see
-the release note at the bottom of this file). To ship 1.2.0, tag `v1.2.0` — the
-tag push triggers `docker.yml` — and hand-write the release notes the way
-v1.1.1's were done.
+`main` is at crate version **0.9.2** (item 6), tagged `v0.9.2` and released
+(marked latest — see the release note at the bottom of this file). This
+project was originally released as 1.0.0 → 1.1.1 → 1.2.0, then renumbered to
+start at 0.9.0 before those tags/Releases/images existed for long; 0.9.0 and
+0.9.1 are historical waypoints referenced in commit messages and release
+notes, not separate tags or Releases — **v0.9.2 is the only one that actually
+exists.**
 
 ---
 
@@ -196,7 +197,7 @@ the `load/*` topics are mainly for $SYS parity.
 | `messages/received` · `messages/sent` | `mqtt_messages_received_total` · `mqtt_messages_sent_total` |
 | `publish/messages/received` · `/sent` · `/dropped` | `mqtt_publish_received_total` (exist) · `mqtt_publish_sent_total` · `mqtt_publish_dropped_total` |
 | `publish/bytes/received` · `/sent` | `mqtt_publish_bytes_received_total` · `mqtt_publish_bytes_sent_total` |
-| `mqtt/<packet>/{received,sent}` | `mqtt_packet_<packet>_{received,sent}_total` (renamed in 1.1.0; the original `mqtt_<packet>_...` collided with the aggregate publish counters) |
+| `mqtt/<packet>/{received,sent}` | `mqtt_packet_<packet>_{received,sent}_total` (renamed in 0.9.1; the original `mqtt_<packet>_...` collided with the aggregate publish counters) |
 | `clients/connected` · `/disconnected` · `/total` · `/maximum` · `/expired` | `mqtt_clients_connected` (exist) · `mqtt_clients_disconnected` · `mqtt_clients_total` · `mqtt_clients_maximum` · `mqtt_clients_expired_total` |
 | `subscriptions/count` · `shared_subscriptions/count` | `mqtt_subscriptions_total` (exist) · `mqtt_shared_subscriptions_count` |
 | `retained messages/count` | `mqtt_retained_messages` (exist) |
@@ -486,7 +487,7 @@ and `ws::client`.
 Two things noticed here but left alone:
 - `SubRecord::to_topic_filter` has no callers, but it is public API on a public
   struct, so removing it is a breaking change rather than a drive-by cleanup.
-- Bridge-to-remote writes were not counted by `record_sent`. Fixed in 1.1.1 —
+- Bridge-to-remote writes were not counted by `record_sent`. Fixed in 0.9.1 —
   see "Resolved: bridge traffic is counted" below.
 
 Original notes follow.
@@ -645,7 +646,7 @@ to anything else. One exporter, every backend.
 
 ## Resolved: bridge traffic is counted
 
-**Decision: count it.** Found while smoke-testing 1.1.0 and fixed in 1.1.1.
+**Decision: count it.** Found while smoke-testing 0.9.1 and fixed in 0.9.1.
 
 `src/bridge.rs` wrote to its remote with `framing::write_packet` and read with
 `framing::read_packet` directly, while the server's connection task went through
@@ -676,26 +677,19 @@ What changed:
   live on two bridged release binaries.
 
 **This inflates existing series for anyone running bridges**, which is why it went
-out in 1.1.1 with a note rather than silently.
+out in 0.9.1 with a note rather than silently.
 
 ---
 
-## Release: v1.1.1 is fully released
+## Historical note: the 0.9.1 waypoint
 
-`main` is at crate version **1.1.1**, tagged `v1.1.1`, the tag push triggered
-`docker.yml` to publish `ghcr.io/elpapimango/pulsemq:1.1.1`, and the **GitHub
-Release object exists** and is marked latest:
-
-<https://github.com/elpapimango/pulsemq/releases/tag/v1.1.1>
-
-The notes were **hand-written, not `--generate-notes`** — auto-generated notes are
-a commit list, which buries the part that actually matters to someone upgrading.
-The body leads with a breaking-changes section and then covers forwarding,
-metrics, the security audit and the performance work.
-
-**1.1.0 was never tagged**, so v1.1.1 is the first tagged build carrying every
-post-1.0.0 change. The notes therefore describe the delta from **1.0.0**, and
-call out the four things that break an existing 1.0.0 deployment:
+This body of work was the release before the current one. It predates the
+0.9.x renumbering (see CLAUDE.md's versioning note) — no `v0.9.1` tag, image,
+or GitHub Release exists on its own; it's folded into the v0.9.2 release
+notes' delta-from-0.9.0 section instead. Kept here for the breaking-changes
+list it originally shipped with, hand-written rather than
+`--generate-notes` because auto-generated notes are a commit list that buries
+the part that actually matters to someone upgrading:
 
 - the config file is JSON, not YAML (item 3) — a `pulsemq.yaml` no longer loads;
 - `config::Startup` lost `Exit` and gained `HashPassword`, and `config::HELP` is

@@ -829,7 +829,7 @@ mod tests {
 
     #[test]
     fn queue_bound_defaults_on() {
-        // The cap must be on by default: 1.0.0 shipped with an unbounded
+        // The cap must be on by default: 0.9.0 shipped with an unbounded
         // offline queue, which is the memory-exhaustion path this closes.
         assert_eq!(Config::default().max_queued_messages, 1000);
 

@@ -18,28 +18,28 @@ project.
 
 ## Project history & status
 
-Current status: the crate version is **1.2.0**, adding OTLP telemetry export
-(item 6) on top of 1.1.1. A **minor** bump: it is additive — the feature is
-off by default, the default build carries none of its dependencies, and the
-Prometheus output is byte-identical to 1.1.1 despite the `Snapshot::series()`
-refactor underneath it. **1.2.0 is not tagged or released yet**; `main` carries
-it.
+**Versioning note**: this project briefly shipped as 1.0.0 → 1.1.1 → 1.2.0
+before that was judged premature and renumbered to start at 0.9.0. All three
+old tags, their GitHub Releases, and the GHCR package were deleted (commit
+history was rewritten to match: `git log` messages say 0.9.x, not 1.x). Only
+**v0.9.2** is an actual tagged/released artifact — 0.9.0 and 0.9.1 are
+historical waypoints named in commit messages and the milestone list below,
+not separate tags, Releases, or images.
 
-The previous release, **v1.1.1**, carried the post-1.0.0 work — forwarding, the
-5A/5B audit, JSON config, `$SYS` metrics, the clap CLI and the 5C refactor (see
-"Done since 1.0.0" below). A minor bump rather than a patch, because three of
-those are breaking for existing consumers: the JSON config move, the
-`Startup`/`HELP` library-API changes, and the `mqtt_packet_*` metric rename.
+Current status: the crate version is **0.9.2**, tagged `v0.9.2` and released
+(marked latest), adding OTLP telemetry export (item 6) on top of the 0.9.1
+waypoint's work — forwarding, the 5A/5B audit, JSON config, `$SYS` metrics,
+the clap CLI and the 5C refactor (see "Done since 0.9.0" below). A **minor**
+bump: it is additive — the feature is off by default, the default build
+carries none of its dependencies, and the Prometheus output is byte-identical
+to the pre-OTLP build despite the `Snapshot::series()` refactor underneath it.
 
-**v1.1.1 is released**: tagged `v1.1.1` (which triggered `docker.yml` to publish
-`ghcr.io/elpapimango/pulsemq:1.1.1`) and a **GitHub Release** object exists,
-marked latest. Note 1.1.0 was never tagged, so 1.1.1 is the first tagged build
-carrying every post-1.0.0 change — its release notes describe the delta from
-**1.0.0**, not from 1.1.0, and lead with the four breaking changes (JSON config,
-the `mqtt_packet_*` rename, bridge traffic in the counters, and the
-`Startup`/`HELP` library-API change). CI (`ci.yml`) and
-image builds (`docker.yml`) are green on `main`. `git log` has the detail — this
-is the map.
+Its release notes describe the delta from **0.9.0**, leading with the four
+breaking changes carried over from the 0.9.1 waypoint (JSON config move, the
+`mqtt_packet_*` rename, bridge traffic in the counters, and the `Startup`/
+`HELP` library-API change), then the 0.9.2 OTLP addition. CI (`ci.yml`) and
+image builds (`docker.yml`) are green on `main`. `git log` has the detail —
+this is the map.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
@@ -62,15 +62,14 @@ Milestones, in order:
    `--allow-anonymous`, `--hash-password`).
 9. **Docker** image + `docker-compose.yml` + GHCR publish workflow.
 10. **MQTT v3.1 & v3.1.1** support (version-aware codec; v5 stays the default).
-11. **v1.0.0** released.
+11. First stable milestone reached (the 0.9.0 waypoint — see versioning note
+    above).
 12. **Renamed** `mqtt_server` → **PulseMQ** (`pulsemq`): crate, binary, image,
     GitHub repo (old URLs redirect). GHCR package was renamed with the repo.
 13. Docker workflow set to **`provenance: false`** and the GHCR package pruned
     of orphaned untagged versions.
 
-No known open bugs. Optional follow-ups if wanted: the `1.0.0` image
-predates `provenance: false` so its index still has two attestation child
-manifests (re-tag/rebuild to make it single-manifest); mutual-TLS on the *admin*
+No known open bugs. Optional follow-ups if wanted: mutual-TLS on the *admin*
 port and WS+mTLS work but aren't covered by automated tests; WebSocket
 server-initiated SSE is not implemented (`GET /mcp` → 405);
 `storage::SubRecord::to_topic_filter` has no callers but is public API, so
@@ -94,7 +93,7 @@ removing it is a breaking change rather than a cleanup.
 
 **Planned work is in [`TODO.md`](TODO.md)** — pick the top item.
 
-Done since 1.0.0:
+Done since 0.9.0:
 - (1) **Forwarding** — broker-to-broker bridge (`bridge.rs`).
 - (5A) **No-panic audit** of the untrusted-input path. `tests/malformed.rs`
   proves `Packet::decode` never panics on hostile bytes across all three
@@ -134,7 +133,7 @@ Done since 1.0.0:
   "Metrics and `$SYS`" below.
 
 **Nothing is left on the roadmap** — every numbered item in `TODO.md` is done.
-Item 6 shipped as the **1.2.0** version bump on `main`, not yet tagged.
+Item 6 shipped as the **v0.9.2** release.
 
 ## Commands
 

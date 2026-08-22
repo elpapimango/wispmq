@@ -304,7 +304,7 @@ packet counters, for mosquitto parity), `mqtt_bytes_received_total`,
 `unsuback`, `pingreq`, `pingresp`, `disconnect`, `auth`. On `$SYS` the same
 values are under `$SYS/broker/mqtt/<packet>/{received,sent}`.
 
-> **Renamed in 1.1.0.** These were `mqtt_<packet>_..._total`, which for PUBLISH
+> **Renamed in 0.9.1.** These were `mqtt_<packet>_..._total`, which for PUBLISH
 > collided with the aggregate `mqtt_publish_received_total` /
 > `mqtt_publish_sent_total` above and made `/metrics` emit a duplicate metric
 > name — invalid exposition, so a scrape errored or dropped one of the two
@@ -343,7 +343,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
 ```
 
 ```
-$SYS/broker/version PulseMQ 1.2.0
+$SYS/broker/version PulseMQ 0.9.2
 $SYS/broker/uptime 15 seconds
 $SYS/broker/clients/connected 1
 $SYS/broker/clients/total 1
