@@ -753,10 +753,10 @@ than a same-pass fix. Pick any item; each is independent.
       deliberate (avoids unbounded SQLite rows keyed by throwaway auto-ids
       from anonymous CONNECTs) and moved to CLAUDE.md's "expected behaviour
       that reads like a bug" list. No code change.
-- [ ] **`--admin-token` is visible to any local user via `ps aux`/
-      `/proc/<pid>/cmdline`** (Low, advisory, not a code bug). Add a README/
-      CLAUDE.md note steering operators toward `MQTT_ADMIN_TOKEN` or the
-      config file for this specific secret.
+- [x] **`--admin-token` is visible to any local user via `ps aux`/
+      `/proc/<pid>/cmdline`** (Low, advisory, not a code bug). ✅ done — added
+      a README note (Admin server → Authentication) steering operators
+      toward `MQTT_ADMIN_TOKEN` or the config file for this secret.
 - [ ] **`Snapshot::series()` reformats ~30 `Cow::Owned` strings on every
       call** (Low, perf). `src/metrics.rs` — runs on every `/metrics` scrape
       and OTLP export refresh; `PACKET_NAMES` is a fixed compile-time array

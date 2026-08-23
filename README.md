@@ -274,6 +274,12 @@ Requests without a valid token receive `401 Unauthorized` with a
 Since the token travels in plaintext, terminate TLS in front of the admin port
 (or keep it bound to loopback) when using it across a network.
 
+Prefer `MQTT_ADMIN_TOKEN` or the config file's `admin_token` over the
+`--admin-token` CLI flag: a flag value is visible to any local user via
+`ps aux` or `/proc/<pid>/cmdline` for the life of the process, while the env
+var and config file are not (though the config file itself should still be
+permissioned so only the broker's user can read it).
+
 ### Health
 
 ```bash
