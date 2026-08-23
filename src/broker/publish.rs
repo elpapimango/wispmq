@@ -200,7 +200,7 @@ impl Broker {
             };
             let pubrel = PubAck::new(ack.packet_id, rc);
             if let Some(tx) = &s.out {
-                let _ = tx.send(Outgoing::Control(Box::new(Packet::Pubrel(pubrel))));
+                let _ = tx.try_send(Outgoing::Control(Box::new(Packet::Pubrel(pubrel))));
             }
         }
         Action::Continue
@@ -216,7 +216,7 @@ impl Broker {
                 ReasonCode::PacketIdentifierNotFound
             };
             if let Some(tx) = &s.out {
-                let _ = tx.send(Outgoing::Control(Box::new(Packet::Pubcomp(PubAck::new(
+                let _ = tx.try_send(Outgoing::Control(Box::new(Packet::Pubcomp(PubAck::new(
                     ack.packet_id,
                     rc,
                 )))));

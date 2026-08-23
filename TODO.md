@@ -24,6 +24,7 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | — | Mutual-TLS test coverage (admin port, WS) | ✅ done |
 | 7 | Post-0.9.2 audit — fix pass (QoS2/retained/timing/panic bugs, dep trim, test dedup) | ✅ done |
 | 8 | Post-0.9.2 audit — backlog (unbounded outbound channel, admin timeout, WS frame cap, ...) | 🔲 open |
+| 9 | New topic ideas (not yet scoped) | 💡 ideas |
 
 **One open item remains: #8**, a set of design-requiring follow-ups from the
 audit that fixed item 7. Pick from its list.
@@ -796,6 +797,32 @@ than a same-pass fix. Pick any item; each is independent.
       num-bigint, a second `thiserror` major version) into the default
       build. Accepted tradeoff — revisit only if a lighter alternative
       surfaces.
+
+---
+
+## 9. New topic ideas — 💡 not yet scoped
+
+Surfaced 2026-08-23, not from the audit — candidates for future items. None
+have acceptance criteria yet; scope one out before starting it.
+
+- [ ] **Continuous fuzzing** (`cargo-fuzz`/AFL) on the codec. `tests/malformed.rs`
+      is a fixed corpus; a fuzz harness finds cases nobody thought to write.
+- [ ] **Load/throughput benchmark harness** — many concurrent clients, sustained
+      publish rate, latency/memory under real load. Distinct from the routing
+      microbenchmarks in `tests/bench_routing.rs` (those measure matching/delivery
+      cost in isolation, not end-to-end connection load).
+- [ ] **Connection-rate / per-IP limiting** — nothing today caps connection
+      attempts per source. Overlaps with item 8's admin-timeout and outbound-
+      channel entries as a DoS-hardening cluster.
+- [ ] **SQLite backup/restore + WAL tuning** — no documented backup story for
+      `/data/*.db`; WAL checkpoint behavior under high write rate untested.
+- [ ] **v5 Enhanced Authentication (AUTH packet, SCRAM)** — spec supports it,
+      PulseMQ only does username/password. Confirm a real need before building.
+- [ ] **Structured audit log for auth/ACL events** — separate from general
+      `tracing` output: connect/disconnect, ACL denials, admin actions, for
+      compliance/forensics.
+- [ ] **Helm chart / k8s manifests** — Docker image exists; no k8s-native
+      deployment path if that becomes a target environment.
 
 ---
 

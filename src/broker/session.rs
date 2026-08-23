@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 use crate::message::Message;
 use crate::packet::Publish;
@@ -42,7 +42,21 @@ pub enum Outgoing {
     Shutdown(crate::types::ReasonCode),
 }
 
-pub type OutTx = UnboundedSender<Outgoing>;
+pub type OutTx = Sender<Outgoing>;
+
+/// Bound on a session's outbound channel: how many not-yet-written packets
+/// (deliveries the connection task hasn't drained to the socket yet) may sit
+/// queued for one client before the broker refuses to enqueue more. Without
+/// this, a client that stops draining its socket while subscribed to a busy
+/// topic could grow this channel — and the broker's memory — without bound,
+/// the same class of leak `max_queued_messages` closes for the *offline*
+/// queue. A QoS 0 delivery that finds the channel full is simply dropped
+/// (spec-compliant "at most once"); a QoS 1/2 delivery falls through to the
+/// existing bounded offline queue instead of being sent (see
+/// `routing::deliver_to_session`). Fixed rather than configurable — same
+/// precedent as `server::CONNECT_TIMEOUT` — because it protects broker
+/// memory, not something an operator tunes per deployment.
+pub(crate) const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 
 pub struct Session {
     pub client_id: String,

@@ -128,8 +128,9 @@ impl Broker {
 /// Deliver a single message to one session, applying its QoS state machine.
 ///
 /// `max_queued` bounds the offline queue (0 = unlimited). Returns `true` when a
-/// message had to be dropped to stay within that bound, so the caller can count
-/// it.
+/// message had to be dropped — either to stay within that bound, or because
+/// the client's outbound channel was full (see `session::OUTBOUND_CHANNEL_
+/// CAPACITY`) — so the caller can count it.
 #[must_use]
 pub(super) fn deliver_to_session(
     session: &mut Session,
@@ -147,34 +148,52 @@ pub(super) fn deliver_to_session(
         QoS::AtMostOnce => {
             if let Some(tx) = &session.out {
                 let publish = message.to_publish(QoS::AtMostOnce, None, retain, sub_ids);
-                let _ = tx.send(Outgoing::Send(Box::new(publish)));
+                // The channel is bounded, so a client that stops draining its
+                // socket eventually fills it. QoS 0 has no offline queue to
+                // fall back to (spec: never queued while offline), so a full
+                // channel just drops the message — that's what "at most once"
+                // means; the alternative would be unbounded memory growth.
+                if tx.try_send(Outgoing::Send(Box::new(publish))).is_err() {
+                    dropped = true;
+                }
             }
-            // QoS 0 is never queued for offline sessions.
         }
         QoS::AtLeastOnce | QoS::ExactlyOnce => {
             if session.is_online() && session.window_open() {
                 if let Some(id) = session.next_id() {
                     let publish = message.to_publish(qos, Some(id), retain, sub_ids);
-                    // Matching on the two-variant set the outer arm admits keeps
-                    // this exhaustive without an `unreachable!()` that a future
-                    // refactor of the outer match could turn into a live panic.
-                    if qos == QoS::AtLeastOnce {
-                        session.awaiting_puback.insert(id, publish.clone());
-                    } else {
-                        session.awaiting_pubrec.insert(id, publish.clone());
-                    }
+                    // Try the send *before* recording the id as in-flight: if
+                    // the channel is full, nothing was actually sent, so
+                    // marking it awaiting-ack would leak the id forever (the
+                    // client can never ack a PUBLISH it never received) — the
+                    // same class of bug the QoS 2 PUBREC fix (item 7) closed.
+                    // Fall through to the queue path instead, exactly as if
+                    // the client were offline or its window were full.
                     if let Some(tx) = &session.out {
-                        let _ = tx.send(Outgoing::Send(Box::new(publish)));
+                        if tx
+                            .try_send(Outgoing::Send(Box::new(publish.clone())))
+                            .is_ok()
+                        {
+                            // Matching on the two-variant set the outer arm
+                            // admits keeps this exhaustive without an
+                            // `unreachable!()` that a future refactor of the
+                            // outer match could turn into a live panic.
+                            if qos == QoS::AtLeastOnce {
+                                session.awaiting_puback.insert(id, publish);
+                            } else {
+                                session.awaiting_pubrec.insert(id, publish);
+                            }
+                            return dropped;
+                        }
                     }
-                    return dropped;
                 }
             }
-            // Offline or window full: queue for later, up to the configured
-            // bound. An unbounded queue lets a durable subscriber to a busy
-            // topic consume memory for the whole session-expiry window while
-            // disconnected, which exhausts a small host. Dropping the oldest
-            // keeps the most recent state, which is what a reconnecting client
-            // usually wants.
+            // Offline, window full, or the outbound channel was full: queue
+            // for later, up to the configured bound. An unbounded queue lets
+            // a durable subscriber to a busy topic consume memory for the
+            // whole session-expiry window while disconnected, which exhausts
+            // a small host. Dropping the oldest keeps the most recent state,
+            // which is what a reconnecting client usually wants.
             if max_queued > 0 && session.queue.len() >= max_queued {
                 session.queue.pop_front();
                 dropped = true;
@@ -210,17 +229,28 @@ pub(super) fn flush_queue(session: &mut Session) {
             pending.retain,
             &pending.subscription_ids,
         );
+        // Same ordering rule as `deliver_to_session`: only record the id as
+        // in-flight once the send actually succeeded. If the channel is
+        // full, put the message back at the front and stop — it'll be
+        // retried the next time the window opens or the session resumes.
+        let sent = match &session.out {
+            Some(tx) => tx
+                .try_send(Outgoing::Send(Box::new(publish.clone())))
+                .is_ok(),
+            None => false,
+        };
+        if !sent {
+            session.queue.push_front(pending);
+            break;
+        }
         match pending.qos {
             QoS::AtLeastOnce => {
-                session.awaiting_puback.insert(id, publish.clone());
+                session.awaiting_puback.insert(id, publish);
             }
             QoS::ExactlyOnce => {
-                session.awaiting_pubrec.insert(id, publish.clone());
+                session.awaiting_pubrec.insert(id, publish);
             }
             QoS::AtMostOnce => {}
-        }
-        if let Some(tx) = &session.out {
-            let _ = tx.send(Outgoing::Send(Box::new(publish)));
         }
     }
 }
@@ -235,17 +265,17 @@ pub(super) fn resume_delivery(session: &mut Session) {
     for publish in session.awaiting_puback.values() {
         let mut p = publish.clone();
         p.dup = true;
-        let _ = tx.send(Outgoing::Send(Box::new(p)));
+        let _ = tx.try_send(Outgoing::Send(Box::new(p)));
     }
     for publish in session.awaiting_pubrec.values() {
         let mut p = publish.clone();
         p.dup = true;
-        let _ = tx.send(Outgoing::Send(Box::new(p)));
+        let _ = tx.try_send(Outgoing::Send(Box::new(p)));
     }
     // Re-send PUBREL for QoS 2 messages awaiting PUBCOMP.
     let pubcomp_ids: Vec<u16> = session.awaiting_pubcomp.iter().copied().collect();
     for id in pubcomp_ids {
-        let _ = tx.send(Outgoing::Control(Box::new(Packet::Pubrel(PubAck::new(
+        let _ = tx.try_send(Outgoing::Control(Box::new(Packet::Pubrel(PubAck::new(
             id,
             ReasonCode::Success,
         )))));
@@ -257,7 +287,95 @@ pub(super) fn resume_delivery(session: &mut Session) {
 pub(super) fn send_to(st: &State, client_id: &str, item: Outgoing) {
     if let Some(s) = st.sessions.get(client_id) {
         if let Some(tx) = &s.out {
-            let _ = tx.send(item);
+            let _ = tx.try_send(item);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_message(topic: &str) -> Message {
+        Message {
+            topic: topic.to_string(),
+            payload: Arc::from(vec![0u8; 4]),
+            qos: QoS::AtMostOnce,
+            retain: false,
+            payload_format_indicator: None,
+            content_type: None,
+            response_topic: None,
+            correlation_data: None,
+            user_properties: Vec::new(),
+            expires_at: None,
+        }
+    }
+
+    /// A full outbound channel is the online counterpart of a full offline
+    /// queue: a QoS 0 delivery must be dropped (spec-compliant "at most
+    /// once"), never block or grow the channel past its bound.
+    #[test]
+    fn qos0_drops_when_channel_is_full() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let mut session = Session::new("c1".into(), 0);
+        session.out = Some(tx);
+        let msg = test_message("t");
+
+        // First delivery fills the channel (capacity 1); it must succeed.
+        assert!(!deliver_to_session(
+            &mut session,
+            &msg,
+            QoS::AtMostOnce,
+            false,
+            &[],
+            0
+        ));
+        // Second delivery finds the channel full and is dropped.
+        assert!(deliver_to_session(
+            &mut session,
+            &msg,
+            QoS::AtMostOnce,
+            false,
+            &[],
+            0
+        ));
+    }
+
+    /// A QoS 1/2 delivery that finds the channel full must not be recorded
+    /// as in-flight — the client never actually received the PUBLISH, so it
+    /// can never ack it, and the id would leak forever (the class of bug the
+    /// QoS 2 PUBREC fix in item 7 closed for a different code path). It must
+    /// fall through to the offline-style queue instead.
+    #[test]
+    fn qos1_falls_through_to_queue_when_channel_is_full() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let mut session = Session::new("c1".into(), 0);
+        session.out = Some(tx);
+        let msg = test_message("t");
+
+        // Fill the channel with an unrelated QoS 0 send first.
+        assert!(!deliver_to_session(
+            &mut session,
+            &msg,
+            QoS::AtMostOnce,
+            false,
+            &[],
+            0
+        ));
+
+        let dropped = deliver_to_session(&mut session, &msg, QoS::AtLeastOnce, false, &[], 0);
+        assert!(
+            !dropped,
+            "max_queued=0 means unlimited, so nothing should be evicted"
+        );
+        assert!(
+            session.awaiting_puback.is_empty(),
+            "id must not be marked in-flight for a message that was never sent"
+        );
+        assert_eq!(
+            session.queue.len(),
+            1,
+            "message should have been queued instead"
+        );
     }
 }

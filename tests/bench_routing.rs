@@ -56,10 +56,14 @@ fn populate(
     sessions: usize,
     subs_each: usize,
     filter: impl Fn(usize, usize) -> String,
-) -> Vec<tokio::sync::mpsc::UnboundedReceiver<pulsemq::broker::Outgoing>> {
+) -> Vec<tokio::sync::mpsc::Receiver<pulsemq::broker::Outgoing>> {
     let mut receivers = Vec::with_capacity(sessions);
     for s in 0..sessions {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Capacity comfortably exceeds every `iters` used in this file (max
+        // 20_000) so a full channel never kicks in and skews what's being
+        // timed; the real per-session bound lives in
+        // `broker::OUTBOUND_CHANNEL_CAPACITY`.
+        let (tx, rx) = tokio::sync::mpsc::channel(100_000);
         broker.register_bridge(format!("sub-{s}"), tx);
         for f in 0..subs_each {
             broker.bridge_add_subscription(&format!("sub-{s}"), &filter(s, f), false);

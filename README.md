@@ -253,6 +253,9 @@ A lightweight HTTP/1.1 server runs on `MQTT_ADMIN_ADDR` (default
 | `/metrics` | GET | guarded | Prometheus text exposition of broker metrics |
 | `/mcp` | POST | guarded | MCP server (JSON-RPC 2.0 over Streamable HTTP) |
 
+Each request is read under a 15s timeout, so a connection that never finishes
+sending its request is dropped rather than held open indefinitely.
+
 ### Authentication
 
 Set `MQTT_ADMIN_TOKEN` to require a bearer token on the guarded endpoints
@@ -294,8 +297,9 @@ packet counters, for mosquitto parity), `mqtt_bytes_received_total`,
 
 **PUBLISH counters** — `mqtt_publish_received_total`,
 `mqtt_publish_sent_total`, `mqtt_publish_delivered_total`,
-`mqtt_publish_dropped_total` (messages discarded because an offline session hit
-`max_queued_messages`), `mqtt_publish_bytes_received_total`,
+`mqtt_publish_dropped_total` (messages discarded because an offline/queued
+session hit `max_queued_messages`, or an online client's outbound channel was
+full), `mqtt_publish_bytes_received_total`,
 `mqtt_publish_bytes_sent_total` (payload bytes, excluding framing).
 
 **Per-control-packet counters** — `mqtt_packet_<packet>_received_total` and

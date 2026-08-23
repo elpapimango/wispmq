@@ -109,14 +109,14 @@ impl Broker {
         if connect.clean_start {
             if let Some(old) = st.sessions.get_mut(&client_id) {
                 if let Some(tx) = old.out.take() {
-                    let _ = tx.send(Outgoing::Shutdown(ReasonCode::SessionTakenOver));
+                    let _ = tx.try_send(Outgoing::Shutdown(ReasonCode::SessionTakenOver));
                 }
             }
             st.sessions.remove(&client_id);
             self.inner.storage.delete_session(client_id.clone());
         } else if let Some(old) = st.sessions.get_mut(&client_id) {
             if let Some(tx) = old.out.take() {
-                let _ = tx.send(Outgoing::Shutdown(ReasonCode::SessionTakenOver));
+                let _ = tx.try_send(Outgoing::Shutdown(ReasonCode::SessionTakenOver));
             }
             session_present = true;
         }

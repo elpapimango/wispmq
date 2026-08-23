@@ -22,7 +22,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
 use tokio::time::Instant;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsConnector;
@@ -216,7 +216,8 @@ fn opt_str(node: &Value, key: &str) -> Option<String> {
 /// reconnect + exponential backoff. Never returns.
 pub async fn run(broker: Broker, cfg: BridgeConfig) {
     let bridge_client = format!("$bridge/{}", cfg.name);
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Outgoing>();
+    let (out_tx, mut out_rx) =
+        tokio::sync::mpsc::channel::<Outgoing>(crate::broker::OUTBOUND_CHANNEL_CAPACITY);
     broker.register_bridge(bridge_client.clone(), out_tx);
     for t in &cfg.topics {
         if t.direction.forwards_out() {
@@ -342,7 +343,7 @@ async fn connect_and_serve(
     cfg: &BridgeConfig,
     ep: &Endpoint,
     bridge_client: &str,
-    out_rx: &mut UnboundedReceiver<Outgoing>,
+    out_rx: &mut Receiver<Outgoing>,
 ) -> Result<bool> {
     let tcp = TcpStream::connect((ep.host.as_str(), ep.port)).await?;
     tcp.set_nodelay(true).ok();
@@ -390,7 +391,7 @@ async fn serve<S>(
     broker: &Broker,
     cfg: &BridgeConfig,
     bridge_client: &str,
-    out_rx: &mut UnboundedReceiver<Outgoing>,
+    out_rx: &mut Receiver<Outgoing>,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -475,7 +476,7 @@ async fn run_loop<R, W>(
     broker: &Broker,
     cfg: &BridgeConfig,
     bridge_client: &str,
-    out_rx: &mut UnboundedReceiver<Outgoing>,
+    out_rx: &mut Receiver<Outgoing>,
     version: ProtocolVersion,
     max: u32,
 ) -> Result<bool>

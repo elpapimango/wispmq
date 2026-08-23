@@ -2,8 +2,9 @@
 //!
 //! Each accepted connection runs one async task that owns the socket. The read
 //! half is driven by `framing::read_packet`; outgoing packets (routed
-//! publishes, acknowledgements, control) arrive on an unbounded channel that
-//! the broker pushes into. A `tokio::select!` multiplexes the two.
+//! publishes, acknowledgements, control) arrive on a bounded channel
+//! (`broker::OUTBOUND_CHANNEL_CAPACITY`) that the broker pushes into with a
+//! non-blocking `try_send`. A `tokio::select!` multiplexes the two.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -190,7 +191,7 @@ where
     let version =
         ProtocolVersion::from_level(connect.protocol_version).unwrap_or(ProtocolVersion::V3_1_1);
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
+    let (tx, mut rx) = mpsc::channel::<Outgoing>(crate::broker::OUTBOUND_CHANNEL_CAPACITY);
 
     let accepted = match broker.handle_connect(connect, tx, identity) {
         Ok(a) => a,

@@ -2,8 +2,9 @@
 //! store, and the handlers the per-connection task drives.
 //!
 //! All shared state lives behind a single `Mutex`. Handlers never await while
-//! holding it — outbound delivery is a non-blocking push into each client's
-//! unbounded channel — so a plain `std::sync::Mutex` is used.
+//! holding it — outbound delivery is a non-blocking `try_send` into each
+//! client's bounded channel (`session::OUTBOUND_CHANNEL_CAPACITY`) — so a
+//! plain `std::sync::Mutex` is used.
 //!
 //! ## Module layout
 //!
@@ -40,8 +41,8 @@ mod subscribe;
 
 // `OutTx`/`Outgoing` are part of the bridge-registration signature, so they
 // are public. `Session` is an internal type: re-exported only inside the crate.
-pub(crate) use session::Session;
 pub use session::{OutTx, Outgoing};
+pub(crate) use session::{Session, OUTBOUND_CHANNEL_CAPACITY};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -255,7 +256,7 @@ impl Broker {
         let st = self.lock();
         if let Some(s) = st.sessions.get(client_id) {
             if let Some(tx) = &s.out {
-                let _ = tx.send(Outgoing::Control(Box::new(packet)));
+                let _ = tx.try_send(Outgoing::Control(Box::new(packet)));
             }
         }
     }

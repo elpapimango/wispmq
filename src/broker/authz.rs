@@ -83,7 +83,7 @@ impl Broker {
             // not published for this server-initiated close.
             let online = session.out.is_some();
             if let Some(tx) = &session.out {
-                let _ = tx.send(Outgoing::Shutdown(ReasonCode::NotAuthorized));
+                let _ = tx.try_send(Outgoing::Shutdown(ReasonCode::NotAuthorized));
             }
             tracing::info!(
                 "ACL reload revoked {} now-unauthorized subscription(s) for {client_id:?} ({who}){}",

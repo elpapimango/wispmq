@@ -9,9 +9,12 @@
 //! A small hand-rolled HTTP/1.1 handler keeps the dependency surface minimal;
 //! each request is served with `Connection: close`.
 
+use std::time::Duration;
+
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::time::timeout;
 
 use crate::broker::Broker;
 use crate::error::Result;
@@ -23,6 +26,13 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Maximum bytes accepted for an HTTP request (headers + body).
 const MAX_REQUEST: usize = 1 << 20;
+
+/// Time allowed to read a full request (headers + body) before dropping the
+/// socket — mirrors `server.rs::CONNECT_TIMEOUT`. `/health` is
+/// unauthenticated, so without this a client can hold the connection open
+/// indefinitely (a slowloris against liveness probes/metrics/MCP) by never
+/// finishing its request; `MAX_REQUEST` alone only bounds bytes, not time.
+const ADMIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Bind the admin listener and serve until the process stops.
 pub async fn run(broker: Broker) -> Result<()> {
@@ -87,8 +97,11 @@ async fn serve_conn<S>(mut stream: S, broker: Broker) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let Some(req) = read_request(&mut stream).await? else {
-        return Ok(());
+    let req = match timeout(ADMIN_REQUEST_TIMEOUT, read_request(&mut stream)).await {
+        Ok(Ok(Some(req))) => req,
+        Ok(Ok(None)) => return Ok(()),
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Ok(()), // read timed out: drop the connection
     };
 
     let (status, content_type, body) = route(&broker, &req);
