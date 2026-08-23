@@ -726,26 +726,14 @@ Real findings from the same audit that need a design decision (a backpressure
 policy, a new config knob, or changes spanning several send paths) rather
 than a same-pass fix. Pick any item; each is independent.
 
-- [ ] **Unbounded per-connection outbound channel — memory-exhaustion DoS**
-      (High). `src/broker/routing.rs` (`deliver_to_session`) +
-      `src/server.rs` (`mpsc::unbounded_channel::<Outgoing>()`). QoS 0 always
-      pushes straight into the channel via `tx.send()`; QoS 1/2 does too
-      whenever `is_online() && window_open()` is true, and `window_open()`'s
-      cap (`client_receive_maximum`) is client-supplied (default 65535) with
-      no server-side ceiling. A client that stops draining its socket while
-      staying subscribed to busy topics grows this channel without bound —
-      the same class of bug `max_queued_messages` fixed for the *offline*
-      queue, still open on the *online* path. Needs: a bound + a drop/
-      disconnect policy for a full channel, and/or a server-side cap on
-      `client_receive_maximum`.
-- [ ] **Admin HTTP server has no read/idle timeout** (Medium/High).
-      `src/admin.rs` (`read_request`/`serve_conn`) bounds total request bytes
-      (`MAX_REQUEST`) but never elapsed time, unlike `server.rs` which wraps
-      every read in `timeout(...)`. `/health` is unauthenticated, so this is
-      an unauthenticated slowloris vector against liveness probes/metrics/
-      MCP. Needs a decision: a fixed timeout constant (simplest, mirrors
-      `CONNECT_TIMEOUT`'s precedent) vs. a new config knob (full wiring per
-      the Configuration checklist in CLAUDE.md).
+- [x] **Unbounded per-connection outbound channel — memory-exhaustion DoS**
+      (High). ✅ done — bounded to `OUTBOUND_CHANNEL_CAPACITY` (1024) via
+      `try_send`; QoS 0 drops on a full channel, QoS 1/2 falls through to the
+      offline queue instead of marking an id in-flight it can never be acked
+      for.
+- [x] **Admin HTTP server has no read/idle timeout** (Medium/High). ✅ done —
+      fixed 15s `ADMIN_REQUEST_TIMEOUT` constant on request reads, mirroring
+      `CONNECT_TIMEOUT`'s precedent.
 - [ ] **WebSocket transport doesn't cap frame/message size to
       `max_packet_size`** (Medium). `src/ws.rs` accepts with
       `tokio-tungstenite`'s default `WebSocketConfig` (64 MiB max message /
