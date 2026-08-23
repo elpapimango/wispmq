@@ -69,11 +69,10 @@ Milestones, in order:
 13. Docker workflow set to **`provenance: false`** and the GHCR package pruned
     of orphaned untagged versions.
 
-No known open bugs. Optional follow-ups if wanted: mutual-TLS on the *admin*
-port and WS+mTLS work but aren't covered by automated tests; WebSocket
-server-initiated SSE is not implemented (`GET /mcp` → 405);
-`storage::SubRecord::to_topic_filter` has no callers but is public API, so
-removing it is a breaking change rather than a cleanup.
+No known open bugs. Optional follow-ups if wanted: WebSocket server-initiated
+SSE is not implemented (`GET /mcp` → 405); `storage::SubRecord::to_topic_filter`
+has no callers but is public API, so removing it is a breaking change rather
+than a cleanup.
 
 **Expected behaviour that reads like a bug** (don't "fix" these):
 - `$SYS` deliveries count as real traffic, so `packets_sent`/`bytes_sent`/
@@ -303,14 +302,24 @@ does for config errors.
 
 ## Tests
 
-73 tests on default features (79 with `--features otel`), plus two `#[ignore]`d
+77 tests on default features (83 with `--features otel`), plus two `#[ignore]`d
 benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`, `config`, `auth`,
 `storage`, `metrics`, `otel`); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
   the wss cert is generated in-test with `rcgen` (dev-dep) so tests are
-  self-contained/CI-safe.
+  self-contained/CI-safe. Also WS + mutual TLS: a client cert's CN drives ACL
+  identity (granted vs. denied topics over the same connection pair), and a
+  connection presenting no client cert is rejected — note that a TLS 1.3
+  client's `connect()` can still return `Ok` in that case (it completes as
+  soon as the client sends its own empty Finished, before learning the server
+  rejected the handshake), so the rejection assertion has to exercise the
+  connection (the WS upgrade), not just check `connect()`'s result.
+- `tests/admin_tls.rs` — mutual TLS on the admin HTTP server: a client with a
+  valid cert gets served normally (`/health` returns 200), one with no client
+  cert is rejected (same TLS 1.3 caveat as above — asserted by attempting an
+  actual request, not by checking `connect()`).
 - `tests/bridge.rs` — two in-process brokers bridged; delivery both ways,
   reconnect when the remote starts late, and that the bridge's remote traffic
   lands in the shared packet counters.
@@ -416,9 +425,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (73 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (77 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (79).
+  `cargo test --features otel` (83).
 
 ## Conventions
 

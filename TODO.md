@@ -21,9 +21,22 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 5C | Refactor & optimize | ✅ done (1 bullet declined) |
 | — | [Bridge send metrics](#resolved-bridge-traffic-is-counted) | ✅ resolved — counted |
 | 6 | Telemetry/log export (OTLP) | ✅ done (feature-gated `otel`) |
+| — | Mutual-TLS test coverage (admin port, WS) | ✅ done |
 
 **The roadmap is clear.** Every numbered item is done. Anything new starts a
 fresh entry here.
+
+**Mutual-TLS test coverage** (optional follow-up, now done): admin-port mTLS
+and WS+mTLS both worked already but had no automated tests. Added
+`tests/admin_tls.rs` (valid client cert served, no cert rejected) and two
+tests in `tests/websocket.rs` (client cert CN drives ACL identity; no cert is
+rejected). Note for anyone extending these: a TLS 1.3 client's `connect()`
+can return `Ok` even when the server is about to reject the handshake for a
+missing client certificate — completion only requires the client to send its
+own (possibly empty) Finished, not to hear back from the server. The
+rejection is only observable by then actually using the connection (a read,
+or the next protocol handshake), which is why both "no cert" tests assert on
+that instead of on `connect()`'s result.
 
 `main` is at crate version **0.9.2** (item 6), tagged `v0.9.2` and released
 (marked latest — see the release note at the bottom of this file). This
