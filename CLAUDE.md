@@ -386,7 +386,10 @@ Notes for picking up in a new session/machine:
 - **Live testing** needs `mosquitto-clients` (`apt install mosquitto-clients`);
   `mosquitto_pub/sub` can't do WebSockets, so WS/WSS are covered by the Rust
   integration tests instead. The MQTT-spec PDFs in `spec/` need `poppler-utils`
-  to extract text if you want to consult them.
+  to extract text if you want to consult them. **Not currently installed on
+  this machine** (as of 2026-08-23) — the v0.9.2 image was verified via
+  `/health`+`/metrics` instead of a real pub/sub round trip; install it and
+  redo that round trip if you want the stronger check.
 - **Not in the repo** (were session-scratch only): the TLS test PKI
   (`ca.pem`, `server.pem/.key`, `client.pem/.key` with CN `test-client`), any
   `passwd` credential file, and `*.db` state — all regenerable. Cert-gen

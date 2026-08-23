@@ -33,6 +33,12 @@ start at 0.9.0 before those tags/Releases/images existed for long; 0.9.0 and
 notes, not separate tags or Releases — **v0.9.2 is the only one that actually
 exists.**
 
+**Pickup item**: `mosquitto-clients` isn't installed on this machine
+(`apt install mosquitto-clients`, see CLAUDE.md "Continuing on another
+machine"). The v0.9.2 image was verified via `/health`+`/metrics` only; once
+installed, do a real `mosquitto_pub`/`mosquitto_sub` round trip against
+`ghcr.io/elpapimango/pulsemq:0.9.2` for the stronger check.
+
 ---
 
 ## 1. Message forwarding (broker-to-broker bridge) — ✅ DONE
