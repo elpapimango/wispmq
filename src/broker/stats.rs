@@ -18,7 +18,7 @@ impl Broker {
     /// network path, but it walks all sessions and must not become a stall.
     pub fn snapshot(&self) -> Snapshot {
         let m = &self.inner.metrics;
-        let st = self.lock();
+        let mut st = self.lock();
 
         let mut clients_connected = 0u64;
         let mut clients_disconnected = 0u64;
@@ -53,6 +53,12 @@ impl Broker {
         // user data. Counting them would make `retained_messages` jump by ~50
         // the moment $SYS is enabled and would silently change the meaning of
         // an existing gauge, so they are excluded here.
+        // Also the moment to drop entries whose `message_expiry_interval`
+        // has passed: nothing else in the broker purges them (they normally
+        // just get overwritten by the next retained PUBLISH on that topic),
+        // so an expired entry that's never republished would otherwise leak
+        // in memory forever, in addition to inflating these gauges.
+        st.retained.retain(|_, msg| !msg.is_expired());
         let mut retained_messages = 0u64;
         let mut retained_bytes = 0u64;
         for (topic, msg) in st.retained.iter() {

@@ -12,13 +12,8 @@ use pulsemq::broker::Broker;
 use pulsemq::config::Config;
 use pulsemq::storage::Storage;
 
-/// Reserve an ephemeral loopback port and return its address.
-fn free_addr() -> std::net::SocketAddr {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = l.local_addr().unwrap();
-    drop(l);
-    addr
-}
+mod common;
+use common::free_addr;
 
 /// Generate a CA plus a server certificate (SAN `localhost`) and a client
 /// certificate signed by it, for mutual-TLS tests. Returns PEM file paths:

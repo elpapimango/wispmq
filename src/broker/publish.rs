@@ -184,6 +184,11 @@ impl Broker {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
             let known = s.awaiting_pubrec.remove(&ack.packet_id).is_some();
+            if known && ack.reason_code.is_error() {
+                // Client rejected the message (MQTT-4.3.3-4): no PUBREL, and
+                // the id is already free since we removed it above.
+                return Action::Continue;
+            }
             let rc = if known {
                 s.awaiting_pubcomp.insert(ack.packet_id);
                 ReasonCode::Success

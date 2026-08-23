@@ -23,12 +23,8 @@ use pulsemq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, Topic
 use pulsemq::storage::Storage;
 use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
-fn free_addr() -> SocketAddr {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = l.local_addr().unwrap();
-    drop(l);
-    addr
-}
+mod common;
+use common::free_addr;
 
 async fn start_broker() -> SocketAddr {
     let addr = free_addr();

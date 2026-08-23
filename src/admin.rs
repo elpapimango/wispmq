@@ -118,14 +118,15 @@ where
     Ok(())
 }
 
-/// Constant-time equality to avoid leaking the token via timing.
+/// Constant-time equality to avoid leaking the token via timing. Runs over
+/// `max(a.len(), b.len())` unconditionally so a length mismatch doesn't
+/// short-circuit and leak the true token's length.
 fn tokens_match(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
+    let mut diff = (a.len() != b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
         diff |= x ^ y;
     }
     diff == 0
@@ -453,4 +454,23 @@ fn call_tool(broker: &Broker, params: Option<&Value>) -> std::result::Result<Val
         "content": [ { "type": "text", "text": text } ],
         "isError": false
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_match_correctness() {
+        assert!(tokens_match("secret", "secret"));
+        assert!(!tokens_match("secret", "different"));
+        // Different lengths must still compare false, not short-circuit in a
+        // way that would make the two calls take a different number of
+        // rounds (the actual timing effect isn't testable here, but the
+        // result must stay correct for every length combination).
+        assert!(!tokens_match("short", "much-longer-token"));
+        assert!(!tokens_match("much-longer-token", "short"));
+        assert!(!tokens_match("", "nonempty"));
+        assert!(tokens_match("", ""));
+    }
 }

@@ -19,12 +19,8 @@ use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
 use pulsemq::storage::Storage;
 use pulsemq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
 
-fn free_addr() -> SocketAddr {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = l.local_addr().unwrap();
-    drop(l);
-    addr
-}
+mod common;
+use common::free_addr;
 
 fn make_broker(addr: SocketAddr, sys_interval: u32) -> Broker {
     let config = Config {
@@ -262,6 +258,52 @@ async fn sys_topics_do_not_inflate_the_retained_gauge() {
     );
     assert_eq!(snap.retained_bytes, 5);
     assert_eq!(broker.retained().len(), 1);
+}
+
+#[tokio::test]
+async fn expired_retained_messages_are_excluded_and_purged() {
+    // A retained message with a short `message_expiry_interval` must stop
+    // counting toward the gauges once it expires, and the entry must not
+    // linger in memory forever just because nothing republished that topic.
+    let addr = free_addr();
+    let broker = make_broker(addr, 0);
+    sleep(Duration::from_millis(150)).await;
+
+    let mut c = connect(addr, "expiring-retainer").await;
+    let mut props = Properties::new();
+    props.message_expiry_interval = Some(1);
+    let p = Packet::Publish(Publish {
+        dup: false,
+        qos: QoS::AtMostOnce,
+        retain: true,
+        topic: "user/soon-gone".into(),
+        packet_id: None,
+        properties: props,
+        payload: b"bye"[..].into(),
+    });
+    write_packet(&mut c, &p, V5).await.unwrap();
+    sleep(Duration::from_millis(200)).await;
+
+    // Before expiry: counted and listed normally.
+    let snap = broker.snapshot();
+    assert_eq!(snap.retained_messages, 1);
+    assert_eq!(snap.retained_bytes, 3);
+    assert_eq!(broker.retained().len(), 1);
+
+    // After expiry: excluded from the gauges, and purged from the map (not
+    // just hidden) -- a later `retained()` call reflects the same removal
+    // whether or not `snapshot()` was called in between.
+    sleep(Duration::from_millis(1200)).await;
+    let snap = broker.snapshot();
+    assert_eq!(
+        snap.retained_messages, 0,
+        "expired retained message must not be counted"
+    );
+    assert_eq!(snap.retained_bytes, 0);
+    assert!(
+        broker.retained().is_empty(),
+        "expired retained message must be purged, not just hidden"
+    );
 }
 
 #[tokio::test]

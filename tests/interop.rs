@@ -9,7 +9,7 @@ use pulsemq::broker::Broker;
 use pulsemq::codec::Properties;
 use pulsemq::config::Config;
 use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use pulsemq::packet::{Connect, Packet, PubAck, Publish, Subscribe, TopicFilter};
 use pulsemq::storage::Storage;
 use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
@@ -184,4 +184,76 @@ async fn retained_message_delivered_on_subscribe() {
         }
     }
     assert!(saw_publish, "did not receive retained message");
+}
+
+#[tokio::test]
+async fn qos2_pubrec_error_gets_no_pubrel() {
+    // MQTT-4.3.3-4: a PUBREC with a Reason Code >= 0x80 means the receiver
+    // rejected the message, and the broker must not follow up with a PUBREL.
+    let addr = start_broker().await;
+
+    let mut sub = connect(&addr, "qos2sub").await;
+    let subscribe = Packet::Subscribe(Subscribe {
+        packet_id: 1,
+        properties: Properties::new(),
+        filters: vec![TopicFilter {
+            filter: "qos2/topic".into(),
+            qos: QoS::ExactlyOnce,
+            no_local: false,
+            retain_as_published: false,
+            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+        }],
+    });
+    write_packet(&mut sub, &subscribe, V5).await.unwrap();
+    match read_packet(&mut sub, 1 << 20, V5).await.unwrap() {
+        ReadOutcome::Packet(Packet::Suback(s), _) => {
+            assert_eq!(s.reason_codes, vec![ReasonCode::GrantedQoS2]);
+        }
+        _ => panic!("expected SUBACK"),
+    }
+
+    let mut pubr = connect(&addr, "qos2pub").await;
+    let publish = Packet::Publish(Publish {
+        dup: false,
+        qos: QoS::ExactlyOnce,
+        retain: false,
+        topic: "qos2/topic".into(),
+        packet_id: Some(1),
+        properties: Properties::new(),
+        payload: b"hi"[..].into(),
+    });
+    write_packet(&mut pubr, &publish, V5).await.unwrap();
+    match read_packet(&mut pubr, 1 << 20, V5).await.unwrap() {
+        ReadOutcome::Packet(Packet::Pubrec(a), _) => assert_eq!(a.packet_id, 1),
+        _ => panic!("expected PUBREC from broker to publisher"),
+    }
+
+    // Subscriber gets the forwarded QoS2 PUBLISH.
+    let forwarded_id =
+        match tokio::time::timeout(Duration::from_secs(2), read_packet(&mut sub, 1 << 20, V5))
+            .await
+            .expect("timed out waiting for delivery")
+            .unwrap()
+        {
+            ReadOutcome::Packet(Packet::Publish(p), _) => {
+                assert_eq!(p.qos, QoS::ExactlyOnce);
+                p.packet_id.expect("QoS2 PUBLISH must carry a packet id")
+            }
+            _ => panic!("expected forwarded PUBLISH"),
+        };
+
+    // Subscriber rejects it with an error PUBREC instead of Success.
+    let err_pubrec = Packet::Pubrec(PubAck::new(forwarded_id, ReasonCode::UnspecifiedError));
+    write_packet(&mut sub, &err_pubrec, V5).await.unwrap();
+
+    // Nothing further should arrive on this connection within the window —
+    // in particular, no PUBREL.
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(500),
+        read_packet(&mut sub, 1 << 20, V5),
+    )
+    .await;
+    if let Ok(Ok(ReadOutcome::Packet(pkt, _))) = outcome {
+        panic!("broker sent {pkt:?} after an error PUBREC; expected nothing");
+    }
 }

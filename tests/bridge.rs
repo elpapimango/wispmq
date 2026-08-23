@@ -19,12 +19,8 @@ use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
 use pulsemq::storage::Storage;
 use pulsemq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
 
-fn free_addr() -> SocketAddr {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = l.local_addr().unwrap();
-    drop(l);
-    addr
-}
+mod common;
+use common::free_addr;
 
 /// Build a broker serving MQTT on `addr` and return the handle.
 fn make_broker(addr: SocketAddr) -> Broker {

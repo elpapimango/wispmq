@@ -159,12 +159,17 @@ fn to_hex(bytes: &[u8]) -> String {
 }
 
 fn from_hex(s: &str) -> Option<Vec<u8>> {
-    if s.is_empty() || !s.len().is_multiple_of(2) {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+    bytes
+        .chunks(2)
+        .map(|pair| {
+            let hi = (pair[0] as char).to_digit(16)?;
+            let lo = (pair[1] as char).to_digit(16)?;
+            Some(((hi << 4) | lo) as u8)
+        })
         .collect()
 }
 
@@ -230,5 +235,15 @@ mod tests {
     fn distinct_salts_per_hash() {
         // Two hashes of the same password differ (random salt).
         assert_ne!(hash_password(b"same"), hash_password(b"same"));
+    }
+
+    #[test]
+    fn from_hex_rejects_non_ascii_without_panicking() {
+        // "a€" has an even byte length (1-byte 'a' + 3-byte '€' = 4), so the
+        // old byte-index str-slicing implementation passed the length check
+        // and then panicked slicing mid-codepoint instead of returning None.
+        assert_eq!(from_hex("a€"), None);
+        assert_eq!(from_hex("zz"), None); // not hex digits, but ASCII
+        assert_eq!(from_hex("2a"), Some(vec![0x2a]));
     }
 }

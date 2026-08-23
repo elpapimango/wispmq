@@ -22,9 +22,11 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | — | [Bridge send metrics](#resolved-bridge-traffic-is-counted) | ✅ resolved — counted |
 | 6 | Telemetry/log export (OTLP) | ✅ done (feature-gated `otel`) |
 | — | Mutual-TLS test coverage (admin port, WS) | ✅ done |
+| 7 | Post-0.9.2 audit — fix pass (QoS2/retained/timing/panic bugs, dep trim, test dedup) | ✅ done |
+| 8 | Post-0.9.2 audit — backlog (unbounded outbound channel, admin timeout, WS frame cap, ...) | 🔲 open |
 
-**The roadmap is clear.** Every numbered item is done. Anything new starts a
-fresh entry here.
+**One open item remains: #8**, a set of design-requiring follow-ups from the
+audit that fixed item 7. Pick from its list.
 
 **Mutual-TLS test coverage** (optional follow-up, now done): admin-port mTLS
 and WS+mTLS both worked already but had no automated tests. Added
@@ -654,6 +656,146 @@ to anything else. One exporter, every backend.
       throttled warning, no impact on publish latency.
 - [ ] No secrets in exported logs.
 - [ ] Config options wired everywhere (config checklist) + README section.
+
+---
+
+## 7. Post-0.9.2 audit — fix pass — ✅ DONE
+
+A three-way parallel audit (security-sensitive modules; broker/codec core
+logic; dependency surface, config wiring, and test cleanliness) turned up six
+self-contained, verifiable bugs and cleanups, each fixed with a regression
+test:
+
+- **QoS 2 PUBREC error handling leaked packet identifiers**
+  (`src/broker/publish.rs`, `handle_pubrec`). It checked whether the packet id
+  was known *before* checking `ack.reason_code.is_error()`, so a client that
+  rejected a QoS 2 message with an error PUBREC still got a `PUBREL(Success)`
+  reply and had the id parked in `awaiting_pubcomp` forever (violates
+  MQTT-4.3.3-4) — `resume_delivery` would keep resending the bogus PUBREL on
+  every reconnect, and repeated rejections could exhaust the 65535-id space.
+  Fixed by checking `is_error()` first. `tests/interop.rs::
+  qos2_pubrec_error_gets_no_pubrel` pins it.
+- **Retained-message gauges never excluded or purged expired entries**
+  (`src/broker/stats.rs::snapshot`). Unlike `retained()` (the admin/MCP
+  listing), the gauge loop counted every non-`$SYS` retained entry regardless
+  of `is_expired()`, and nothing anywhere purged an expired entry — it only
+  disappeared when overwritten. Result: `mqtt_retained_messages`/
+  `mqtt_retained_bytes`/the `$SYS` counters drifted from what `retained()` and
+  actual delivery showed, and an expired-but-never-republished topic leaked in
+  memory indefinitely. Fixed by having `snapshot()` purge expired entries from
+  `st.retained` in the same pass it already walks under the lock — one change
+  fixes both the drift and the leak. `tests/sysinfo.rs::
+  expired_retained_messages_are_excluded_and_purged` pins it.
+- **Admin bearer-token compare leaked the token's length via timing**
+  (`src/admin.rs::tokens_match`). Its doc comment claimed constant-time, but
+  an early `if a.len() != b.len() { return false }` short-circuited before
+  the constant-time loop. Fixed to run over `max(a.len(), b.len())`
+  unconditionally, folding the length mismatch into the same diff
+  accumulator. `admin::tests::tokens_match_correctness` covers the
+  behavior (the timing property itself isn't practically assertable in CI).
+- **`auth::from_hex` panicked on malformed multi-byte input** — it sliced the
+  password-file salt/hash field by byte index (`&s[i..i+2]`) after only
+  checking the byte length was even, so a field containing a UTF-8 character
+  whose boundary didn't land on an even offset panicked the whole process at
+  startup instead of failing cleanly. Fixed to operate on raw bytes via
+  `chunks(2)` with no `str` index slicing. `auth::tests::
+  from_hex_rejects_non_ascii_without_panicking` pins it.
+- **`tokio`'s `full` feature pulled in unused surface** (`Cargo.toml`) —
+  grepped the crate for `tokio::fs`/`tokio::process`/stdio helpers (none
+  found; file I/O is `std::fs`, stdin is `std::io::stdin`) and narrowed to
+  the features actually used: `rt-multi-thread`, `macros`, `net`, `sync`,
+  `time`, `signal`, `io-util`. Drops the `parking_lot` subtree (7 transitive
+  packages) from the default build; `cargo tree` diffed before/after to
+  confirm, no behavior change.
+- **`free_addr()` was copy-pasted across 6 integration-test files** — moved
+  to `tests/common/mod.rs` (the standard shared-code pattern for Rust
+  integration tests) and imported via `mod common; use common::free_addr;`.
+
+All findings were verified by reading the actual code, not taken on an
+agent's say-so. Verification: `cargo fmt --all -- --check`, `cargo clippy
+--all-targets --all-features -- -D warnings`, `cargo test --locked` (48 lib
+unit tests, up from 46; all integration suites green), and `cargo test
+--locked --features otel` — all green.
+
+---
+
+## 8. Post-0.9.2 audit — backlog — 🔲 OPEN
+
+Real findings from the same audit that need a design decision (a backpressure
+policy, a new config knob, or changes spanning several send paths) rather
+than a same-pass fix. Pick any item; each is independent.
+
+- [ ] **Unbounded per-connection outbound channel — memory-exhaustion DoS**
+      (High). `src/broker/routing.rs` (`deliver_to_session`) +
+      `src/server.rs` (`mpsc::unbounded_channel::<Outgoing>()`). QoS 0 always
+      pushes straight into the channel via `tx.send()`; QoS 1/2 does too
+      whenever `is_online() && window_open()` is true, and `window_open()`'s
+      cap (`client_receive_maximum`) is client-supplied (default 65535) with
+      no server-side ceiling. A client that stops draining its socket while
+      staying subscribed to busy topics grows this channel without bound —
+      the same class of bug `max_queued_messages` fixed for the *offline*
+      queue, still open on the *online* path. Needs: a bound + a drop/
+      disconnect policy for a full channel, and/or a server-side cap on
+      `client_receive_maximum`.
+- [ ] **Admin HTTP server has no read/idle timeout** (Medium/High).
+      `src/admin.rs` (`read_request`/`serve_conn`) bounds total request bytes
+      (`MAX_REQUEST`) but never elapsed time, unlike `server.rs` which wraps
+      every read in `timeout(...)`. `/health` is unauthenticated, so this is
+      an unauthenticated slowloris vector against liveness probes/metrics/
+      MCP. Needs a decision: a fixed timeout constant (simplest, mirrors
+      `CONNECT_TIMEOUT`'s precedent) vs. a new config knob (full wiring per
+      the Configuration checklist in CLAUDE.md).
+- [ ] **WebSocket transport doesn't cap frame/message size to
+      `max_packet_size`** (Medium). `src/ws.rs` accepts with
+      `tokio-tungstenite`'s default `WebSocketConfig` (64 MiB max message /
+      16 MiB max frame), which buffers the whole message in memory *before*
+      `framing::read_packet`'s own size check ever runs. A WS client can
+      force up to 64 MiB of in-memory buffering per frame regardless of the
+      configured `max_packet_size`. Fix direction: derive a
+      `WebSocketConfig` from `cfg.max_packet_size` and pass it into
+      `accept_hdr_async`/`client_async`.
+- [ ] **`client_max_packet_size` (CONNECT's Maximum Packet Size property) is
+      parsed but never enforced on send** (Medium) — MQTT-3.1.2-24. Stored on
+      `Session` (`src/broker/session.rs`, set in `connect.rs`) but no send
+      path (`routing.rs`, `server.rs::send`, `bridge.rs::send`) reads it, so
+      a client that advertises a small cap to protect itself can still be
+      sent an oversized PUBLISH. Needs a decision on behavior when a message
+      would exceed the client's cap — skipping delivery to that one client
+      is the spec-compliant option, since it's a per-client publish-time
+      property, not connection-fatal.
+- [ ] **Auto-assigned Client Identifier sessions can never persist to
+      SQLite** (Low/informational) — confirm intentional first.
+      `src/broker/connect.rs` forces `session.persistent = false` whenever
+      the ClientID was server-assigned, even with a non-zero requested
+      Session Expiry Interval. In-memory survival still works
+      (`session_expiry_interval`/`schedule_expiry`), but the session can't
+      survive a broker restart, and `ClientInfo.persistent` misreports it.
+      If deliberate (avoids unbounded storage rows keyed by random
+      auto-ids), move this note to CLAUDE.md's "expected behaviour that
+      reads like a bug" list instead of fixing it; if not, wire persistence
+      keyed by the assigned id.
+- [ ] **`--admin-token` is visible to any local user via `ps aux`/
+      `/proc/<pid>/cmdline`** (Low, advisory, not a code bug). Add a README/
+      CLAUDE.md note steering operators toward `MQTT_ADMIN_TOKEN` or the
+      config file for this specific secret.
+- [ ] **`Snapshot::series()` reformats ~30 `Cow::Owned` strings on every
+      call** (Low, perf). `src/metrics.rs` — runs on every `/metrics` scrape
+      and OTLP export refresh; `PACKET_NAMES` is a fixed compile-time array
+      and could be precomputed once. Cold path — flagged for awareness per
+      the project's own measured-optimization bar (item 5C), not urgent.
+- [ ] **`Snapshot::to_prometheus()` builds an intermediate `String` per
+      series** (Low, perf). `src/metrics.rs` — `write!` into the output
+      buffer directly would drop one allocation per series per scrape.
+- [ ] **`otel::is_exporter_target` allocates a `format!` per candidate per
+      log line** (Low, perf, `otel`-feature-only). `src/otel.rs` — rewrite
+      allocation-free with `target.strip_prefix(t)` + a boundary check.
+- [ ] **`x509-parser` dependency weight for one call site**
+      (informational — no action recommended unless revisited).
+      `src/tls.rs` has the only call, for CN extraction from a client cert;
+      it pulls a fairly heavy transitive subtree (asn1-rs, der-parser, nom,
+      num-bigint, a second `thiserror` major version) into the default
+      build. Accepted tradeoff — revisit only if a lighter alternative
+      surfaces.
 
 ---
 

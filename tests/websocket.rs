@@ -21,13 +21,8 @@ use pulsemq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, Topic
 use pulsemq::storage::Storage;
 use pulsemq::types::{ProtocolVersion, QoS, ReasonCode};
 
-/// Reserve an ephemeral loopback port and return its address.
-fn free_addr() -> std::net::SocketAddr {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = l.local_addr().unwrap();
-    drop(l);
-    addr
-}
+mod common;
+use common::free_addr;
 
 fn connect_packet(client_id: &str, version: ProtocolVersion) -> Packet {
     let protocol_name = if version == ProtocolVersion::V3_1 {
