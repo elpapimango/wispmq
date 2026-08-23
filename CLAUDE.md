@@ -89,6 +89,17 @@ than a cleanup.
   error. Unreachable today (every such field arrives u16-length-prefixed), and
   clamping beats a wrapping length prefix, which would desync the peer's framing
   for every subsequent packet.
+- A CONNECT with an empty Client Identifier (server-assigned, `connect.rs`)
+  never persists to SQLite even with a non-zero requested Session Expiry
+  Interval — `session.persistent` is forced `false` whenever the id was
+  auto-assigned. In-memory survival across a clean reconnect within the same
+  process still works; only surviving a broker *restart* is unavailable.
+  Deliberate: a client can't predict what id it'll be assigned, so it's not
+  going to reconnect with it after a restart anyway, and persisting rows keyed
+  by throwaway `auto-<counter>-<unix time>` ids for every anonymous CONNECT
+  would let one open a SQLite row per connection with no bound — the same
+  class of unbounded-resource issue `max_queued_messages` and
+  `OUTBOUND_CHANNEL_CAPACITY` guard against elsewhere.
 
 **Planned work is in [`TODO.md`](TODO.md)** — pick the top item.
 

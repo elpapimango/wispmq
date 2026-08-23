@@ -748,17 +748,11 @@ than a same-pass fix. Pick any item; each is independent.
       the offline queue in `flush_queue`) against `client_max_packet_size`
       and drops (not sends, not queues) whatever exceeds it, counted in
       `mqtt_publish_dropped_total`.
-- [ ] **Auto-assigned Client Identifier sessions can never persist to
-      SQLite** (Low/informational) — confirm intentional first.
-      `src/broker/connect.rs` forces `session.persistent = false` whenever
-      the ClientID was server-assigned, even with a non-zero requested
-      Session Expiry Interval. In-memory survival still works
-      (`session_expiry_interval`/`schedule_expiry`), but the session can't
-      survive a broker restart, and `ClientInfo.persistent` misreports it.
-      If deliberate (avoids unbounded storage rows keyed by random
-      auto-ids), move this note to CLAUDE.md's "expected behaviour that
-      reads like a bug" list instead of fixing it; if not, wire persistence
-      keyed by the assigned id.
+- [x] **Auto-assigned Client Identifier sessions can never persist to
+      SQLite** (Low/informational). ✅ resolved as intentional — confirmed
+      deliberate (avoids unbounded SQLite rows keyed by throwaway auto-ids
+      from anonymous CONNECTs) and moved to CLAUDE.md's "expected behaviour
+      that reads like a bug" list. No code change.
 - [ ] **`--admin-token` is visible to any local user via `ps aux`/
       `/proc/<pid>/cmdline`** (Low, advisory, not a code bug). Add a README/
       CLAUDE.md note steering operators toward `MQTT_ADMIN_TOKEN` or the
