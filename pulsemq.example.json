@@ -7,6 +7,8 @@
   "receive_maximum": 64,
   "max_session_expiry": 3600,
   "max_queued_messages": 1000,
+  "max_connections_per_ip": 0,
+  "connection_rate_window_secs": 10,
   "sys_interval": 10,
 
   "maximum_qos": 2,

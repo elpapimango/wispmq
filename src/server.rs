@@ -57,6 +57,11 @@ pub async fn run(broker: Broker) -> Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         Metrics::inc(broker.metrics().socket_connections_ref());
+        if !broker.rate_limiter().check(peer.ip()) {
+            Metrics::inc(&broker.metrics().connections_rate_limited);
+            tracing::debug!("rate-limited connection from {peer}");
+            continue;
+        }
         let broker = broker.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
@@ -109,6 +114,11 @@ pub async fn run_ws(broker: Broker) -> Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         Metrics::inc(broker.metrics().socket_connections_ref());
+        if !broker.rate_limiter().check(peer.ip()) {
+            Metrics::inc(&broker.metrics().connections_rate_limited);
+            tracing::debug!("rate-limited connection from {peer}");
+            continue;
+        }
         let broker = broker.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {

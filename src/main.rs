@@ -149,6 +149,9 @@ async fn main() -> Result<()> {
     // Periodic $SYS/broker status topics (no-op when sys_interval is 0).
     tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
 
+    // Periodic connection-rate-limiter cleanup (no-op when disabled).
+    tokio::spawn(pulsemq::ratelimit::run(broker.clone()));
+
     // Reload the ACL policy on SIGHUP (Unix). The rest of the broker keeps
     // running; a bad policy file is reported and the previous one is kept.
     #[cfg(unix)]

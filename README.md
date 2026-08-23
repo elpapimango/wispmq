@@ -161,6 +161,8 @@ below rather than inline in the example file. A full file looks like:
   "receive_maximum": 64,
   "max_session_expiry": 3600,
   "max_queued_messages": 1000,
+  "max_connections_per_ip": 0,
+  "connection_rate_window_secs": 10,
   "sys_interval": 10,
 
   "maximum_qos": 2,
@@ -201,6 +203,8 @@ Config file:
 Network:
       --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
       --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
+      --max-connections-per-ip <N>  Max new connections per source IP per rate window, 0=unlimited [MQTT_MAX_CONNECTIONS_PER_IP]
+      --connection-rate-window-secs <SECS>  Window (seconds) max-connections-per-ip is measured over [MQTT_CONNECTION_RATE_WINDOW_SECS]
 MQTT TLS:
       --tls-cert <FILE>             PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
       --tls-key <FILE>              PEM private key for the MQTT port [MQTT_TLS_KEY]
@@ -296,7 +300,9 @@ Point a scraper at `http://127.0.0.1:9001/metrics`.
 
 **Traffic counters** — `mqtt_connections_total`,
 `mqtt_socket_connections_total` (sockets accepted, including those that never
-sent CONNECT), `mqtt_packets_received_total`, `mqtt_packets_sent_total`,
+sent CONNECT), `mqtt_connections_rate_limited_total` (connections refused by
+`MQTT_MAX_CONNECTIONS_PER_IP`, before any packet was read),
+`mqtt_packets_received_total`, `mqtt_packets_sent_total`,
 `mqtt_messages_received_total`, `mqtt_messages_sent_total` (aliases of the
 packet counters, for mosquitto parity), `mqtt_bytes_received_total`,
 `mqtt_bytes_sent_total`.
@@ -509,6 +515,8 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_WS_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the WS port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
 | `MQTT_ADMIN_ADDR` | `127.0.0.1:9001` | Admin/metrics/MCP HTTP bind address |
+| `MQTT_MAX_CONNECTIONS_PER_IP` | `0` | Max new connections per source IP per rate window; `0` = unlimited |
+| `MQTT_CONNECTION_RATE_WINDOW_SECS` | `10` | Window (s) `MQTT_MAX_CONNECTIONS_PER_IP` is measured over |
 | `MQTT_ADMIN_TLS_CERT` / `MQTT_ADMIN_TLS_KEY` | _(unset)_ | PEM cert + key; both set = HTTPS on the admin port |
 | `MQTT_ADMIN_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the admin port |
 | `MQTT_ADMIN_TOKEN` | _(unset)_ | Bearer token for `/metrics` and `/mcp`; unset = open |
@@ -533,6 +541,15 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_OTLP_LOGS` | `true` | Export logs |
 | `MQTT_SERVICE_NAME` | `pulsemq` | `service.name` on the exported OTLP resource |
 | `RUST_LOG` | `info` | Log level (`tracing` filter) |
+
+`MQTT_MAX_CONNECTIONS_PER_IP` defaults to `0` (unlimited) rather than being
+on by default like the broker's other resource bounds: many legitimate
+deployments put a whole fleet of devices behind one NAT gateway, which looks
+identical to an attacker from a single source IP. Set it explicitly if the
+broker is exposed somewhere connection floods are a real concern; it caps new
+connections per source IP, per `MQTT_CONNECTION_RATE_WINDOW_SECS`, shared
+across the MQTT and WebSocket ports, and is counted in
+`mqtt_connections_rate_limited_total`.
 
 ### Transports
 

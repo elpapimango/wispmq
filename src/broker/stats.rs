@@ -84,6 +84,7 @@ impl Broker {
             publish_bytes_sent: Metrics::get(&m.publish_bytes_sent),
             socket_connections: Metrics::get(&m.socket_connections),
             clients_expired: Metrics::get(&m.clients_expired),
+            connections_rate_limited: Metrics::get(&m.connections_rate_limited),
             packet_received: Metrics::read_array(&m.packet_received),
             packet_sent: Metrics::read_array(&m.packet_sent),
             clients_connected,

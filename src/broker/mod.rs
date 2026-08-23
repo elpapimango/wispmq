@@ -59,6 +59,7 @@ use crate::packet::Packet;
 use crate::packet::{
     Connack, Connect, Disconnect, PubAck, Publish, RetainHandling, SubAck, Subscribe, Unsubscribe,
 };
+use crate::ratelimit::RateLimiter;
 use crate::storage::{LoadedState, Storage, SubRecord};
 use crate::topic;
 use crate::types::{ProtocolVersion, QoS, ReasonCode};
@@ -110,6 +111,9 @@ struct Inner {
     acl: RwLock<Arc<Acl>>,
     /// Username/password credentials. `None` disables password authentication.
     auth: Option<Credentials>,
+    /// Per-source-IP connection-rate limiter for the MQTT and WebSocket
+    /// listeners; disabled by default. See `crate::ratelimit`.
+    rate_limiter: RateLimiter,
 }
 
 /// Summary of one session, for the admin/MCP surface.
@@ -172,6 +176,10 @@ impl Broker {
             sessions.insert(rec.client_id, s);
         }
         let retained = loaded.retained.into_iter().collect();
+        let rate_limiter = RateLimiter::new(
+            config.max_connections_per_ip,
+            config.connection_rate_window_secs,
+        );
 
         Broker {
             inner: Arc::new(Inner {
@@ -188,6 +196,7 @@ impl Broker {
                 started_at: std::time::Instant::now(),
                 acl: RwLock::new(Arc::new(acl)),
                 auth,
+                rate_limiter,
             }),
         }
     }
@@ -198,6 +207,10 @@ impl Broker {
 
     pub fn metrics(&self) -> &Metrics {
         &self.inner.metrics
+    }
+
+    pub fn rate_limiter(&self) -> &RateLimiter {
+        &self.inner.rate_limiter
     }
 
     /// Acquire the single lock guarding all shared broker state.

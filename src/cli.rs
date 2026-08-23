@@ -47,6 +47,16 @@ pub(crate) struct Cli {
     #[arg(long, value_name = "ADDR", help_heading = "Network")]
     pub admin_addr: Option<SocketAddr>,
 
+    /// Max new connections per source IP per rate window, 0=unlimited
+    /// [MQTT_MAX_CONNECTIONS_PER_IP] (default 0)
+    #[arg(long, value_name = "N", help_heading = "Network")]
+    pub max_connections_per_ip: Option<u32>,
+
+    /// Window (seconds) max-connections-per-ip is measured over
+    /// [MQTT_CONNECTION_RATE_WINDOW_SECS] (default 10)
+    #[arg(long, value_name = "SECS", help_heading = "Network")]
+    pub connection_rate_window_secs: Option<u32>,
+
     /// PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
     #[arg(long, value_name = "FILE", help_heading = "MQTT TLS")]
     pub tls_cert: Option<String>,
@@ -317,6 +327,12 @@ impl Cli {
         if let Some(v) = self.max_queued_messages {
             cfg.max_queued_messages = v;
         }
+        if let Some(v) = self.max_connections_per_ip {
+            cfg.max_connections_per_ip = v;
+        }
+        if let Some(v) = self.connection_rate_window_secs {
+            cfg.connection_rate_window_secs = v;
+        }
         if let Some(v) = self.sys_interval {
             cfg.sys_interval = v;
         }
@@ -472,10 +488,19 @@ mod tests {
             "t.json",
         )
         .unwrap();
-        parse(&["--receive-maximum", "42", "--max-queued-messages", "7"]).apply(&mut cfg);
+        parse(&[
+            "--receive-maximum",
+            "42",
+            "--max-queued-messages",
+            "7",
+            "--max-connections-per-ip",
+            "20",
+        ])
+        .apply(&mut cfg);
         assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1"); // from file
         assert_eq!(cfg.receive_maximum, 42); // CLI override
         assert_eq!(cfg.max_queued_messages, 7); // CLI override
+        assert_eq!(cfg.max_connections_per_ip, 20); // CLI override
     }
 
     #[test]

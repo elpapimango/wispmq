@@ -25,6 +25,7 @@ pub mod message;
 pub mod metrics;
 pub mod otel;
 pub mod packet;
+pub mod ratelimit;
 pub mod server;
 pub mod storage;
 pub mod sysinfo;

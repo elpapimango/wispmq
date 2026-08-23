@@ -794,9 +794,20 @@ have acceptance criteria yet; scope one out before starting it.
       publish rate, latency/memory under real load. Distinct from the routing
       microbenchmarks in `tests/bench_routing.rs` (those measure matching/delivery
       cost in isolation, not end-to-end connection load).
-- [ ] **Connection-rate / per-IP limiting** — nothing today caps connection
-      attempts per source. Overlaps with item 8's admin-timeout and outbound-
-      channel entries as a DoS-hardening cluster.
+- [x] **Connection-rate / per-IP limiting** — ✅ done. A fixed-window
+      per-source-IP limiter (`src/ratelimit.rs`, `RateLimiter`) guards the
+      MQTT TCP/TLS and WebSocket listeners (`server::run`/`run_ws`), sharing
+      one budget across both so switching transport doesn't reset it. A
+      rejected connection's socket is closed immediately, before any
+      TLS/WS handshake or packet is read, and counted in
+      `mqtt_connections_rate_limited_total`. **Off by default**
+      (`max_connections_per_ip: 0`) unlike this project's other resource
+      bounds — a rate cap has a real false-positive risk (a fleet of devices
+      behind one NAT gateway shares a source IP), so it's opt-in via
+      `max_connections_per_ip` / `connection_rate_window_secs`, full config
+      checklist wired (env/CLI/JSON/README/`pulsemq.example.json`). A
+      periodic sweep (mirrors `sysinfo::run`'s shape) evicts stale per-IP
+      entries so the tracking map doesn't grow unbounded.
 - [ ] **SQLite backup/restore + WAL tuning** — no documented backup story for
       `/data/*.db`; WAL checkpoint behavior under high write rate untested.
 - [ ] **v5 Enhanced Authentication (AUTH packet, SCRAM)** — spec supports it,

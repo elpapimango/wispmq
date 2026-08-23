@@ -38,6 +38,8 @@ const KNOWN_KEYS: &[&str] = &[
     "receive_maximum",
     "max_session_expiry",
     "max_queued_messages",
+    "max_connections_per_ip",
+    "connection_rate_window_secs",
     "sys_interval",
     "maximum_qos",
     "retain_available",
@@ -240,6 +242,16 @@ pub struct Config {
     /// the whole session-expiry window, which is a memory-exhaustion DoS on a
     /// small host. `0` means unlimited (the pre-1.0 behaviour).
     pub max_queued_messages: u32,
+    /// Max new connections accepted from one source IP per
+    /// `connection_rate_window_secs`, shared across the MQTT and WebSocket
+    /// listeners. `0` — the default — disables the limit: unlike this
+    /// project's always-on resource bounds, a rate cap has a real
+    /// false-positive risk (many devices behind one NAT gateway share a
+    /// source IP), so it is opt-in rather than a hardcoded ceiling.
+    pub max_connections_per_ip: u32,
+    /// Window (seconds) `max_connections_per_ip` is measured over. Only
+    /// meaningful when `max_connections_per_ip` is nonzero.
+    pub connection_rate_window_secs: u32,
     /// How often (seconds) to refresh the `$SYS/broker/...` status topics.
     /// `0` disables $SYS publishing entirely.
     pub sys_interval: u32,
@@ -293,6 +305,8 @@ impl Default for Config {
             server_keep_alive: None,
             max_session_expiry: 3600,
             max_queued_messages: 1000,
+            max_connections_per_ip: 0,
+            connection_rate_window_secs: 10,
             sys_interval: 10,
             bridges: Vec::new(),
             otlp_endpoint: None,
@@ -383,6 +397,16 @@ impl Config {
         if let Some(v) = non_empty_env("MQTT_MAX_QUEUED_MESSAGES") {
             if let Ok(n) = v.parse() {
                 self.max_queued_messages = n;
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_MAX_CONNECTIONS_PER_IP") {
+            if let Ok(n) = v.parse() {
+                self.max_connections_per_ip = n;
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_CONNECTION_RATE_WINDOW_SECS") {
+            if let Ok(n) = v.parse() {
+                self.connection_rate_window_secs = n;
             }
         }
         if let Some(v) = non_empty_env("MQTT_SYS_INTERVAL") {
@@ -601,6 +625,12 @@ impl Config {
         if let Some(n) = j_u32(doc, "max_queued_messages", source)? {
             self.max_queued_messages = n;
         }
+        if let Some(n) = j_u32(doc, "max_connections_per_ip", source)? {
+            self.max_connections_per_ip = n;
+        }
+        if let Some(n) = j_u32(doc, "connection_rate_window_secs", source)? {
+            self.connection_rate_window_secs = n;
+        }
         if let Some(n) = j_u32(doc, "sys_interval", source)? {
             self.sys_interval = n;
         }
@@ -809,7 +839,9 @@ mod tests {
   "max_packet_size": 2097152,
   "receive_maximum": 100,
   "max_session_expiry": 600,
-  "max_queued_messages": 42
+  "max_queued_messages": 42,
+  "max_connections_per_ip": 20,
+  "connection_rate_window_secs": 5
 }"#;
         let mut cfg = Config::default();
         cfg.apply_json_str(json, "test.json").unwrap();
@@ -825,6 +857,17 @@ mod tests {
         assert_eq!(cfg.receive_maximum, 100);
         assert_eq!(cfg.max_session_expiry, 600);
         assert_eq!(cfg.max_queued_messages, 42);
+        assert_eq!(cfg.max_connections_per_ip, 20);
+        assert_eq!(cfg.connection_rate_window_secs, 5);
+    }
+
+    #[test]
+    fn connection_rate_limit_defaults_off() {
+        // Unlike the queue bound above, this must default to disabled: a
+        // rate cap has a real false-positive risk (NAT-shared source IPs)
+        // that the always-on resource bounds elsewhere don't.
+        assert_eq!(Config::default().max_connections_per_ip, 0);
+        assert_eq!(Config::default().connection_rate_window_secs, 10);
     }
 
     #[test]

@@ -74,6 +74,9 @@ pub struct Metrics {
     pub socket_connections: AtomicU64,
     /// High-water mark of concurrently connected clients.
     pub clients_maximum: AtomicU64,
+    /// Connections refused by the per-source-IP rate limiter
+    /// (`max_connections_per_ip`), before any packet was read.
+    pub connections_rate_limited: AtomicU64,
     /// Persistent sessions discarded because their Session Expiry elapsed.
     pub clients_expired: AtomicU64,
     /// Per-control-packet counters, indexed by packet type (1..=15).
@@ -171,6 +174,7 @@ pub struct Snapshot {
     pub publish_bytes_sent: u64,
     pub socket_connections: u64,
     pub clients_expired: u64,
+    pub connections_rate_limited: u64,
     /// Per-control-packet counters indexed by packet type; see [`PACKET_NAMES`].
     pub packet_received: [u64; PACKET_KINDS],
     pub packet_sent: [u64; PACKET_KINDS],
@@ -362,6 +366,11 @@ impl Snapshot {
             "mqtt_clients_expired_total",
             "Total persistent sessions discarded after Session Expiry elapsed.",
             self.clients_expired,
+        );
+        counter(
+            "mqtt_connections_rate_limited_total",
+            "Total connections refused by the per-source-IP rate limiter.",
+            self.connections_rate_limited,
         );
 
         // Per-control-packet counters. Index 0 is the reserved type and is
@@ -571,6 +580,10 @@ impl Snapshot {
             "connections/socket/count",
             self.socket_connections.to_string(),
         );
+        add(
+            "connections/rate_limited",
+            self.connections_rate_limited.to_string(),
+        );
         add("bridges/connected", self.bridges_connected.to_string());
 
         for (kind, name) in PACKET_NAMES.iter().enumerate().skip(1) {
@@ -620,6 +633,7 @@ mod tests {
             publish_bytes_sent: next(),
             socket_connections: next(),
             clients_expired: next(),
+            connections_rate_limited: next(),
             packet_received,
             packet_sent,
             clients_connected: next(),
