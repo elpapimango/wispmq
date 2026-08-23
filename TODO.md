@@ -734,15 +734,13 @@ than a same-pass fix. Pick any item; each is independent.
 - [x] **Admin HTTP server has no read/idle timeout** (Medium/High). ✅ done —
       fixed 15s `ADMIN_REQUEST_TIMEOUT` constant on request reads, mirroring
       `CONNECT_TIMEOUT`'s precedent.
-- [ ] **WebSocket transport doesn't cap frame/message size to
-      `max_packet_size`** (Medium). `src/ws.rs` accepts with
-      `tokio-tungstenite`'s default `WebSocketConfig` (64 MiB max message /
-      16 MiB max frame), which buffers the whole message in memory *before*
-      `framing::read_packet`'s own size check ever runs. A WS client can
-      force up to 64 MiB of in-memory buffering per frame regardless of the
-      configured `max_packet_size`. Fix direction: derive a
-      `WebSocketConfig` from `cfg.max_packet_size` and pass it into
-      `accept_hdr_async`/`client_async`.
+- [x] **WebSocket transport doesn't cap frame/message size to
+      `max_packet_size`** (Medium). ✅ done — `src/ws.rs` now builds a
+      `WebSocketConfig` from `max_packet_size` and passes it to
+      `accept_hdr_async_with_config`/`client_async_with_config`, so
+      tungstenite refuses to buffer a frame/message past that bound instead
+      of allowing its 64 MiB/16 MiB defaults ahead of
+      `framing::read_packet`'s own check.
 - [ ] **`client_max_packet_size` (CONNECT's Maximum Packet Size property) is
       parsed but never enforced on send** (Medium) — MQTT-3.1.2-24. Stored on
       `Session` (`src/broker/session.rs`, set in `connect.rs`) but no send

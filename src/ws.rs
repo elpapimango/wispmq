@@ -22,26 +22,49 @@ use tokio_tungstenite::tungstenite::handshake::server::{
     Callback, ErrorResponse, Request, Response,
 };
 use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::WebSocketStream;
 
+/// Bound tungstenite's own frame/message buffering to `max_packet_size`
+/// instead of its defaults (64 MiB message / 16 MiB frame). Without this,
+/// tungstenite buffers a whole WS message in memory *before*
+/// `framing::read_packet`'s own `max_packet_size` check ever runs, so a
+/// hostile peer forces that much allocation regardless of the configured
+/// limit. Sized to one MQTT packet even though a WS message may in principle
+/// carry several concatenated packets — this mirrors `framing::read_packet`'s
+/// per-packet enforcement, at the accepted cost of rejecting a
+/// multi-packet-per-frame message larger than `max_packet_size`.
+fn ws_config(max_packet_size: u32) -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(max_packet_size as usize))
+        .max_frame_size(Some(max_packet_size as usize))
+}
+
 /// Perform the server-side WebSocket handshake (selecting the `mqtt`
 /// subprotocol) over an already-accepted (optionally TLS) stream, and return a
-/// byte-stream adapter over it.
-pub async fn accept<S>(stream: S) -> io::Result<WsStream<S>>
+/// byte-stream adapter over it. `max_packet_size` bounds tungstenite's own
+/// frame/message buffering (see [`ws_config`]).
+pub async fn accept<S>(stream: S, max_packet_size: u32) -> io::Result<WsStream<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let ws = tokio_tungstenite::accept_hdr_async(stream, SelectMqttSubprotocol)
-        .await
-        .map_err(ws_to_io)?;
+    let ws = tokio_tungstenite::accept_hdr_async_with_config(
+        stream,
+        SelectMqttSubprotocol,
+        Some(ws_config(max_packet_size)),
+    )
+    .await
+    .map_err(ws_to_io)?;
     Ok(WsStream::new(ws))
 }
 
 /// Perform the *client*-side WebSocket handshake to `url` (offering the `mqtt`
 /// subprotocol) over an already-connected (optionally TLS) stream, and return a
 /// byte-stream adapter. Used by the bridge to reach a `ws://`/`wss://` remote.
-pub async fn client<S>(stream: S, url: &str) -> io::Result<WsStream<S>>
+/// `max_packet_size` bounds tungstenite's own frame/message buffering (see
+/// [`ws_config`]).
+pub async fn client<S>(stream: S, url: &str, max_packet_size: u32) -> io::Result<WsStream<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -52,9 +75,13 @@ where
     request
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mqtt"));
-    let (ws, _resp) = tokio_tungstenite::client_async(request, stream)
-        .await
-        .map_err(ws_to_io)?;
+    let (ws, _resp) = tokio_tungstenite::client_async_with_config(
+        request,
+        stream,
+        Some(ws_config(max_packet_size)),
+    )
+    .await
+    .map_err(ws_to_io)?;
     Ok(WsStream::new(ws))
 }
 

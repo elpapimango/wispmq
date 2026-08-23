@@ -264,6 +264,44 @@ async fn mqtt_over_plain_websocket() {
 }
 
 #[tokio::test]
+async fn oversized_websocket_frame_is_rejected() {
+    // `max_packet_size` bounds tungstenite's own frame/message buffering
+    // (`ws::ws_config`), not just `framing::read_packet`'s check — a frame
+    // bigger than the cap must be refused before it's fully buffered, rather
+    // than accepted and only rejected once reassembled into an MQTT packet.
+    let addr = free_addr();
+    let config = Config {
+        ws_listen_addr: Some(addr),
+        max_packet_size: 1024,
+        ..Config::default()
+    };
+    let _broker = start_ws_broker(config).await;
+
+    let url = format!("ws://{addr}/mqtt");
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(mqtt_request(&url))
+        .await
+        .unwrap();
+
+    // Larger than the configured 1024-byte cap; content doesn't need to be a
+    // valid MQTT packet — the WS layer should reject it before that matters.
+    let oversized = Message::binary(vec![0u8; 8192]);
+    let send_result = ws.send(oversized).await;
+
+    // Either the send itself fails, or the connection is closed by the time
+    // we try to read from it — either way, the peer must not stay open with
+    // the oversized frame silently buffered.
+    if send_result.is_ok() {
+        let recv = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .expect("connection should have been closed, not left hanging");
+        assert!(
+            !matches!(recv, Some(Ok(ref m)) if m.is_binary()),
+            "server must not accept a frame larger than max_packet_size"
+        );
+    }
+}
+
+#[tokio::test]
 async fn mqtt_v311_over_plain_websocket() {
     // MQTT v3.1.1 (protocol level 4) over WebSockets: no properties on the wire.
     let addr = free_addr();

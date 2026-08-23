@@ -354,12 +354,22 @@ async fn connect_and_serve(
             serve(tls, broker, cfg, bridge_client, out_rx).await
         }
         Transport::Ws => {
-            let ws = crate::ws::client(tcp, ep.ws_url.as_deref().unwrap()).await?;
+            let ws = crate::ws::client(
+                tcp,
+                ep.ws_url.as_deref().unwrap(),
+                broker.config().max_packet_size,
+            )
+            .await?;
             serve(ws, broker, cfg, bridge_client, out_rx).await
         }
         Transport::Wss => {
             let tls = tls_connect(cfg, ep, tcp).await?;
-            let ws = crate::ws::client(tls, ep.ws_url.as_deref().unwrap()).await?;
+            let ws = crate::ws::client(
+                tls,
+                ep.ws_url.as_deref().unwrap(),
+                broker.config().max_packet_size,
+            )
+            .await?;
             serve(ws, broker, cfg, bridge_client, out_rx).await
         }
     }

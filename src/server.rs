@@ -102,6 +102,7 @@ pub async fn run_ws(broker: Broker) -> Result<()> {
         (true, false) => " (TLS)",
         _ => "",
     };
+    let max_packet_size = cfg.max_packet_size;
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("MQTT-over-WebSocket listening on {addr}{mode}");
 
@@ -118,7 +119,7 @@ pub async fn run_ws(broker: Broker) -> Result<()> {
                 Some(acceptor) => match acceptor.accept(stream).await {
                     Ok(tls) => {
                         let identity = crate::tls::peer_cn(tls.get_ref().1.peer_certificates());
-                        match crate::ws::accept(tls).await {
+                        match crate::ws::accept(tls, max_packet_size).await {
                             Ok(ws) => handle_connection(ws, peer, broker, identity).await,
                             Err(e) => {
                                 tracing::debug!("WebSocket handshake with {peer} failed: {e}");
@@ -131,7 +132,7 @@ pub async fn run_ws(broker: Broker) -> Result<()> {
                         return;
                     }
                 },
-                None => match crate::ws::accept(stream).await {
+                None => match crate::ws::accept(stream, max_packet_size).await {
                     Ok(ws) => handle_connection(ws, peer, broker, None).await,
                     Err(e) => {
                         tracing::debug!("WebSocket handshake with {peer} failed: {e}");
