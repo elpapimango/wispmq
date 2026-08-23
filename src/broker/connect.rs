@@ -173,7 +173,10 @@ impl Broker {
         // Resume delivery of any inflight / queued messages for a resumed
         // session (4.4). Fresh sessions have nothing to resume.
         if session_present {
-            resume_delivery(session);
+            let dropped = resume_delivery(session);
+            if dropped > 0 {
+                Metrics::add(&self.inner.metrics.publish_dropped, dropped);
+            }
         }
 
         Metrics::inc(&self.inner.metrics.connections_total);

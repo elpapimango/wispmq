@@ -61,7 +61,7 @@ use crate::packet::{
 };
 use crate::storage::{LoadedState, Storage, SubRecord};
 use crate::topic;
-use crate::types::{QoS, ReasonCode};
+use crate::types::{ProtocolVersion, QoS, ReasonCode};
 
 /// Identity used for ACL decisions when a connection presents no client
 /// certificate (no mutual TLS).

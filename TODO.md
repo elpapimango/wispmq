@@ -741,15 +741,13 @@ than a same-pass fix. Pick any item; each is independent.
       tungstenite refuses to buffer a frame/message past that bound instead
       of allowing its 64 MiB/16 MiB defaults ahead of
       `framing::read_packet`'s own check.
-- [ ] **`client_max_packet_size` (CONNECT's Maximum Packet Size property) is
-      parsed but never enforced on send** (Medium) — MQTT-3.1.2-24. Stored on
-      `Session` (`src/broker/session.rs`, set in `connect.rs`) but no send
-      path (`routing.rs`, `server.rs::send`, `bridge.rs::send`) reads it, so
-      a client that advertises a small cap to protect itself can still be
-      sent an oversized PUBLISH. Needs a decision on behavior when a message
-      would exceed the client's cap — skipping delivery to that one client
-      is the spec-compliant option, since it's a per-client publish-time
-      property, not connection-fatal.
+- [x] **`client_max_packet_size` (CONNECT's Maximum Packet Size property) is
+      parsed but never enforced on send** (Medium) — MQTT-3.1.2-24. ✅ done —
+      `src/broker/routing.rs` now checks the wire size of every QoS 0/1/2
+      PUBLISH (fresh delivery in `deliver_to_session`, and re-delivery from
+      the offline queue in `flush_queue`) against `client_max_packet_size`
+      and drops (not sends, not queues) whatever exceeds it, counted in
+      `mqtt_publish_dropped_total`.
 - [ ] **Auto-assigned Client Identifier sessions can never persist to
       SQLite** (Low/informational) — confirm intentional first.
       `src/broker/connect.rs` forces `session.persistent = false` whenever

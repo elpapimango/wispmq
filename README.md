@@ -298,8 +298,9 @@ packet counters, for mosquitto parity), `mqtt_bytes_received_total`,
 **PUBLISH counters** — `mqtt_publish_received_total`,
 `mqtt_publish_sent_total`, `mqtt_publish_delivered_total`,
 `mqtt_publish_dropped_total` (messages discarded because an offline/queued
-session hit `max_queued_messages`, or an online client's outbound channel was
-full), `mqtt_publish_bytes_received_total`,
+session hit `max_queued_messages`, an online client's outbound channel was
+full, or a message exceeded a client's advertised Maximum Packet Size),
+`mqtt_publish_bytes_received_total`,
 `mqtt_publish_bytes_sent_total` (payload bytes, excluding framing).
 
 **Per-control-packet counters** — `mqtt_packet_<packet>_received_total` and

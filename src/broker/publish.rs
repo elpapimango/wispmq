@@ -175,7 +175,10 @@ impl Broker {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
             s.awaiting_puback.remove(&ack.packet_id);
-            flush_queue(s);
+            let dropped = flush_queue(s);
+            if dropped > 0 {
+                Metrics::add(&self.inner.metrics.publish_dropped, dropped);
+            }
         }
         Action::Continue
     }
@@ -229,7 +232,10 @@ impl Broker {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
             s.awaiting_pubcomp.remove(&ack.packet_id);
-            flush_queue(s);
+            let dropped = flush_queue(s);
+            if dropped > 0 {
+                Metrics::add(&self.inner.metrics.publish_dropped, dropped);
+            }
         }
         Action::Continue
     }

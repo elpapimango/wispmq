@@ -125,12 +125,27 @@ impl Broker {
     }
 }
 
+/// Whether `publish`, as it would appear on the wire, exceeds the client's
+/// Maximum Packet Size (`cap`, 3.1.2.11.4, MQTT-3.1.2-24). Only v5 clients can
+/// advertise this property (v3.x CONNECTs carry no Properties), so
+/// `ProtocolVersion::V5` is always the correct encoding to measure against
+/// wherever this is called. A placeholder packet id is fine for sizing before
+/// the real one is assigned — a packet identifier always encodes as exactly 2
+/// bytes regardless of value, so the measurement is exact, not approximate.
+fn exceeds_wire_size(publish: &Publish, cap: u32) -> bool {
+    match Packet::Publish(publish.clone()).encode(ProtocolVersion::V5) {
+        Ok(bytes) => bytes.len() as u32 > cap,
+        Err(_) => false,
+    }
+}
+
 /// Deliver a single message to one session, applying its QoS state machine.
 ///
 /// `max_queued` bounds the offline queue (0 = unlimited). Returns `true` when a
-/// message had to be dropped — either to stay within that bound, or because
-/// the client's outbound channel was full (see `session::OUTBOUND_CHANNEL_
-/// CAPACITY`) — so the caller can count it.
+/// message had to be dropped — to stay within that bound, because the
+/// client's outbound channel was full (see `session::OUTBOUND_CHANNEL_
+/// CAPACITY`), or because it exceeds the client's advertised Maximum Packet
+/// Size — so the caller can count it.
 #[must_use]
 pub(super) fn deliver_to_session(
     session: &mut Session,
@@ -148,17 +163,36 @@ pub(super) fn deliver_to_session(
         QoS::AtMostOnce => {
             if let Some(tx) = &session.out {
                 let publish = message.to_publish(QoS::AtMostOnce, None, retain, sub_ids);
-                // The channel is bounded, so a client that stops draining its
-                // socket eventually fills it. QoS 0 has no offline queue to
-                // fall back to (spec: never queued while offline), so a full
-                // channel just drops the message — that's what "at most once"
-                // means; the alternative would be unbounded memory growth.
-                if tx.try_send(Outgoing::Send(Box::new(publish))).is_err() {
+                if session
+                    .client_max_packet_size
+                    .is_some_and(|cap| exceeds_wire_size(&publish, cap))
+                {
+                    dropped = true;
+                } else if tx.try_send(Outgoing::Send(Box::new(publish))).is_err() {
+                    // The channel is bounded, so a client that stops draining
+                    // its socket eventually fills it. QoS 0 has no offline
+                    // queue to fall back to (spec: never queued while
+                    // offline), so a full channel just drops the message —
+                    // that's what "at most once" means; the alternative would
+                    // be unbounded memory growth.
                     dropped = true;
                 }
             }
         }
         QoS::AtLeastOnce | QoS::ExactlyOnce => {
+            // A message that will never fit under the client's current cap
+            // must not be sent *or* queued — queueing would just wait forever
+            // for a cap that only changes on the next CONNECT. Checked before
+            // the online/offline branch below so both paths are covered by
+            // one early return; `next_id()` is deliberately not called here,
+            // since the probe never needs a real id (see `exceeds_wire_size`).
+            if let Some(cap) = session.client_max_packet_size {
+                let probe = message.to_publish(qos, Some(0), retain, sub_ids);
+                if exceeds_wire_size(&probe, cap) {
+                    dropped = true;
+                    return dropped;
+                }
+            }
             if session.is_online() && session.window_open() {
                 if let Some(id) = session.next_id() {
                     let publish = message.to_publish(qos, Some(id), retain, sub_ids);
@@ -210,8 +244,12 @@ pub(super) fn deliver_to_session(
 }
 
 /// Send queued messages while the inflight window has room and the client is
-/// online. Called after a PUBACK/PUBCOMP frees a slot, or on resume.
-pub(super) fn flush_queue(session: &mut Session) {
+/// online. Called after a PUBACK/PUBCOMP frees a slot, or on resume. Returns
+/// how many queued messages were dropped for exceeding the client's Maximum
+/// Packet Size, so the caller can add it to `mqtt_publish_dropped_total`.
+#[must_use]
+pub(super) fn flush_queue(session: &mut Session) -> u64 {
+    let mut dropped = 0u64;
     while session.is_online() && session.window_open() {
         let Some(pending) = session.queue.pop_front() else {
             break;
@@ -229,6 +267,19 @@ pub(super) fn flush_queue(session: &mut Session) {
             pending.retain,
             &pending.subscription_ids,
         );
+        // A message that no longer fits under the client's current cap (it
+        // may have been queued under a looser or absent earlier one) is
+        // dropped outright rather than requeued — waiting won't help, the
+        // cap only changes on the next CONNECT. `id` was never recorded into
+        // `awaiting_puback`/`awaiting_pubrec`, so it isn't "in use" (see
+        // `Session::id_in_use`) and is simply available again — no leak.
+        if session
+            .client_max_packet_size
+            .is_some_and(|cap| exceeds_wire_size(&publish, cap))
+        {
+            dropped += 1;
+            continue;
+        }
         // Same ordering rule as `deliver_to_session`: only record the id as
         // in-flight once the send actually succeeded. If the channel is
         // full, put the message back at the front and stop — it'll be
@@ -253,13 +304,16 @@ pub(super) fn flush_queue(session: &mut Session) {
             QoS::AtMostOnce => {}
         }
     }
+    dropped
 }
 
 /// On session resume, redeliver unacknowledged messages (4.4) then flush the
-/// offline queue.
-pub(super) fn resume_delivery(session: &mut Session) {
+/// offline queue. Returns how many queued messages `flush_queue` dropped for
+/// exceeding the client's Maximum Packet Size.
+#[must_use]
+pub(super) fn resume_delivery(session: &mut Session) -> u64 {
     let Some(tx) = session.out.clone() else {
-        return;
+        return 0;
     };
     // Re-send QoS 1 & 2 PUBLISH packets with DUP=1, preserving packet ids.
     for publish in session.awaiting_puback.values() {
@@ -280,7 +334,7 @@ pub(super) fn resume_delivery(session: &mut Session) {
             ReasonCode::Success,
         )))));
     }
-    flush_queue(session);
+    flush_queue(session)
 }
 
 /// Push an outgoing item to a client if it is online.
@@ -376,6 +430,89 @@ mod tests {
             session.queue.len(),
             1,
             "message should have been queued instead"
+        );
+    }
+
+    /// A QoS 0 message that exceeds the client's advertised Maximum Packet
+    /// Size (MQTT-3.1.2-24) must be dropped, not sent — the cap is
+    /// per-client, so this is the "at most once" drop path, same as a full
+    /// channel.
+    #[test]
+    fn qos0_oversized_publish_is_dropped_not_sent() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut session = Session::new("c1".into(), 0);
+        session.out = Some(tx);
+        session.client_max_packet_size = Some(3); // smaller than any real PUBLISH
+        let msg = test_message("t");
+
+        assert!(deliver_to_session(
+            &mut session,
+            &msg,
+            QoS::AtMostOnce,
+            false,
+            &[],
+            0
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "oversized message must not reach the channel"
+        );
+    }
+
+    /// A QoS 1/2 message that exceeds the client's cap must be dropped
+    /// outright — not sent, and not queued for a cap that only changes on
+    /// the next CONNECT (which would otherwise wait forever), and not
+    /// recorded as in-flight (nothing was actually sent to ack).
+    #[test]
+    fn qos1_oversized_publish_is_dropped_not_queued() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut session = Session::new("c1".into(), 0);
+        session.out = Some(tx);
+        session.client_max_packet_size = Some(3);
+        let msg = test_message("t");
+
+        assert!(deliver_to_session(
+            &mut session,
+            &msg,
+            QoS::AtLeastOnce,
+            false,
+            &[],
+            0
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "oversized message must not reach the channel"
+        );
+        assert!(session.queue.is_empty(), "must not be queued either");
+        assert!(
+            session.awaiting_puback.is_empty(),
+            "must not be marked in-flight for a message that was never sent"
+        );
+    }
+
+    /// A message already sitting in the offline queue (queued under a looser
+    /// or absent earlier cap) that no longer fits the client's current cap on
+    /// resume must be dropped by `flush_queue`, not resent or requeued.
+    #[test]
+    fn flush_queue_drops_oversized_pending_without_requeueing() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut session = Session::new("c1".into(), 0);
+        session.out = Some(tx);
+        session.client_max_packet_size = Some(3);
+        session.queue.push_back(Pending {
+            message: test_message("t"),
+            qos: QoS::AtLeastOnce,
+            retain: false,
+            subscription_ids: Vec::new(),
+        });
+
+        let dropped = flush_queue(&mut session);
+
+        assert_eq!(dropped, 1);
+        assert!(session.queue.is_empty(), "must not be pushed back");
+        assert!(
+            rx.try_recv().is_err(),
+            "oversized message must not reach the channel"
         );
     }
 }
