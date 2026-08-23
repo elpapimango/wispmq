@@ -10,6 +10,7 @@
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 
 use crate::types::PacketType;
 
@@ -237,6 +238,25 @@ impl Series {
     }
 }
 
+/// Precomputed `mqtt_packet_<name>_{received,sent}_total` names and HELP text
+/// for the per-packet counters in [`Snapshot::series`], in the same
+/// (packet, suffix) order it emits them — `(kind - 1) * 2 + suffix_index`.
+/// `PACKET_NAMES` is fixed at compile time, so there is nothing to
+/// reformat on every `/metrics` scrape or OTLP export refresh; this table is
+/// built once on first use instead.
+static PACKET_SERIES_TEXT: LazyLock<Vec<(String, String)>> = LazyLock::new(|| {
+    let mut v = Vec::with_capacity((PACKET_NAMES.len() - 1) * 2);
+    for name in PACKET_NAMES.iter().skip(1) {
+        for verb in ["received", "sent"] {
+            v.push((
+                format!("mqtt_packet_{name}_{verb}_total"),
+                format!("Total {} packets {verb}.", name.to_uppercase()),
+            ));
+        }
+    }
+    v
+});
+
 impl Snapshot {
     /// Every statistic in the snapshot, in a stable order: counters first
     /// (including the per-control-packet array), then gauges.
@@ -355,15 +375,16 @@ impl Snapshot {
         // errored on it. `$SYS` never had the clash — it keeps these under a
         // separate `mqtt/` sub-hierarchy — so only the flattened Prometheus
         // names needed the prefix. `no_duplicate_metric_names` guards it now.
-        for (kind, name) in PACKET_NAMES.iter().enumerate().skip(1) {
-            for (suffix, verb, value) in [
-                ("received", "received", self.packet_received[kind]),
-                ("sent", "sent", self.packet_sent[kind]),
-            ] {
+        for (kind, _) in PACKET_NAMES.iter().enumerate().skip(1) {
+            for (i, value) in [self.packet_received[kind], self.packet_sent[kind]]
+                .into_iter()
+                .enumerate()
+            {
+                let (name, help) = &PACKET_SERIES_TEXT[(kind - 1) * 2 + i];
                 v.push(Series {
-                    name: Cow::Owned(format!("mqtt_packet_{name}_{suffix}_total")),
+                    name: Cow::Borrowed(name.as_str()),
                     kind: SeriesKind::Counter,
-                    help: Cow::Owned(format!("Total {} packets {verb}.", name.to_uppercase())),
+                    help: Cow::Borrowed(help.as_str()),
                     value,
                 });
             }
@@ -457,6 +478,8 @@ impl Snapshot {
 
     /// Render the snapshot in the Prometheus text exposition format (v0.0.4).
     pub fn to_prometheus(&self) -> String {
+        use std::fmt::Write as _;
+
         let mut o = String::with_capacity(2048);
         for s in self.series() {
             let (name, value) = (&s.name, s.value);
@@ -464,10 +487,14 @@ impl Snapshot {
                 SeriesKind::Counter => "counter",
                 SeriesKind::Gauge => "gauge",
             };
-            o.push_str(&format!(
+            // `write!` into `o` directly instead of formatting into a
+            // throwaway `String` first — one fewer allocation per series per
+            // scrape/export. `write!` into a `String` never fails.
+            let _ = write!(
+                o,
                 "# HELP {name} {}\n# TYPE {name} {ty}\n{name} {value}\n",
                 s.help
-            ));
+            );
         }
         // Version as a static label on a constant-1 gauge, the conventional way
         // to expose build info to Prometheus.
@@ -475,10 +502,7 @@ impl Snapshot {
             "# HELP mqtt_build_info Broker build information.\n\
              # TYPE mqtt_build_info gauge\n",
         );
-        o.push_str(&format!(
-            "mqtt_build_info{{version=\"{}\"}} 1\n",
-            self.version
-        ));
+        let _ = writeln!(o, "mqtt_build_info{{version=\"{}\"}} 1", self.version);
         o
     }
 

@@ -109,9 +109,18 @@ mod imp {
     ];
 
     fn is_exporter_target(target: &str) -> bool {
-        EXPORTER_TARGETS
-            .iter()
-            .any(|t| target == *t || target.starts_with(&format!("{t}::")))
+        // Allocation-free equivalent of `target == t || target.starts_with(&
+        // format!("{t}::"))`: strip the candidate prefix, then check what's
+        // left is either nothing (exact match) or starts with the `::`
+        // module separator (a submodule) — not just any string that happens
+        // to start with the same letters (e.g. `pulsemq::broker` must not
+        // match a hypothetical `pulsemq` candidate the way `pulsemqx` would
+        // with a bare `starts_with(t)`).
+        EXPORTER_TARGETS.iter().any(|t| {
+            target
+                .strip_prefix(t)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+        })
     }
 
     /// Live telemetry export. Held by `main` for the lifetime of the process so

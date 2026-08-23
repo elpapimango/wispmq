@@ -23,11 +23,14 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 6 | Telemetry/log export (OTLP) | ✅ done (feature-gated `otel`) |
 | — | Mutual-TLS test coverage (admin port, WS) | ✅ done |
 | 7 | Post-0.9.2 audit — fix pass (QoS2/retained/timing/panic bugs, dep trim, test dedup) | ✅ done |
-| 8 | Post-0.9.2 audit — backlog (unbounded outbound channel, admin timeout, WS frame cap, ...) | 🔲 open |
+| 8 | Post-0.9.2 audit — backlog (unbounded outbound channel, admin timeout, WS frame cap, ...) | ✅ done |
 | 9 | New topic ideas (not yet scoped) | 💡 ideas |
 
-**One open item remains: #8**, a set of design-requiring follow-ups from the
-audit that fixed item 7. Pick from its list.
+**Nothing is left on the roadmap.** All of item 8's backlog is resolved —
+either fixed in code, resolved as intentional/accepted with a documentation
+note, or (for two low-priority perf bullets) fixed and confirmed
+output-identical. Item 9 is a set of unscoped ideas, not a committed item —
+pick one and scope it before starting if wanted.
 
 **Mutual-TLS test coverage** (optional follow-up, now done): admin-port mTLS
 and WS+mTLS both worked already but had no automated tests. Added
@@ -720,7 +723,7 @@ unit tests, up from 46; all integration suites green), and `cargo test
 
 ---
 
-## 8. Post-0.9.2 audit — backlog — 🔲 OPEN
+## 8. Post-0.9.2 audit — backlog — ✅ done
 
 Real findings from the same audit that need a design decision (a backpressure
 policy, a new config knob, or changes spanning several send paths) rather
@@ -757,24 +760,26 @@ than a same-pass fix. Pick any item; each is independent.
       `/proc/<pid>/cmdline`** (Low, advisory, not a code bug). ✅ done — added
       a README note (Admin server → Authentication) steering operators
       toward `MQTT_ADMIN_TOKEN` or the config file for this secret.
-- [ ] **`Snapshot::series()` reformats ~30 `Cow::Owned` strings on every
-      call** (Low, perf). `src/metrics.rs` — runs on every `/metrics` scrape
-      and OTLP export refresh; `PACKET_NAMES` is a fixed compile-time array
-      and could be precomputed once. Cold path — flagged for awareness per
-      the project's own measured-optimization bar (item 5C), not urgent.
-- [ ] **`Snapshot::to_prometheus()` builds an intermediate `String` per
-      series** (Low, perf). `src/metrics.rs` — `write!` into the output
-      buffer directly would drop one allocation per series per scrape.
-- [ ] **`otel::is_exporter_target` allocates a `format!` per candidate per
-      log line** (Low, perf, `otel`-feature-only). `src/otel.rs` — rewrite
-      allocation-free with `target.strip_prefix(t)` + a boundary check.
-- [ ] **`x509-parser` dependency weight for one call site**
-      (informational — no action recommended unless revisited).
-      `src/tls.rs` has the only call, for CN extraction from a client cert;
-      it pulls a fairly heavy transitive subtree (asn1-rs, der-parser, nom,
-      num-bigint, a second `thiserror` major version) into the default
-      build. Accepted tradeoff — revisit only if a lighter alternative
-      surfaces.
+- [x] **`Snapshot::series()` reformats ~30 `Cow::Owned` strings on every
+      call** (Low, perf). ✅ done — `src/metrics.rs` now builds the
+      per-packet names/HELP text once into a `static LazyLock` table
+      (`PACKET_SERIES_TEXT`) and borrows from it (`Cow::Borrowed`) instead of
+      `format!`-ing them on every call. `to_prometheus()` output confirmed
+      byte-identical before/after via the scratchpad-dump-and-diff method.
+- [x] **`Snapshot::to_prometheus()` builds an intermediate `String` per
+      series** (Low, perf). ✅ done — `write!` into the output buffer
+      directly instead of `format!` + `push_str`, dropping one allocation per
+      series per scrape/export.
+- [x] **`otel::is_exporter_target` allocates a `format!` per candidate per
+      log line** (Low, perf, `otel`-feature-only). ✅ done — rewritten
+      allocation-free with `target.strip_prefix(t)` + an empty-or-`::`
+      boundary check; `exporter_targets_are_excluded_from_export` still
+      passes.
+- [x] **`x509-parser` dependency weight for one call site**
+      (informational — no action recommended unless revisited). ✅ resolved
+      as accepted — re-reviewed, no lighter alternative surfaced;
+      `src/tls.rs`'s CN-extraction call site is unchanged. Revisit only if
+      that changes.
 
 ---
 
