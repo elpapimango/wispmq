@@ -398,11 +398,13 @@ Notes for picking up in a new session/machine:
   credential file appears anywhere in history (verified before going public; the
   TLS test PKI and `passwd` files have always been session-scratch only). The
   GHCR **package is public** too, but note its visibility is managed
-  *separately* from the repo: flipping the repo does not flip the package. Change
-  the package with
-  `gh api -X PATCH /user/packages/container/pulsemq --field visibility=private`
-  (needs `write:packages`), and the repo with
-  `gh repo edit elpapimango/pulsemq --visibility private
+  *separately* from the repo: flipping the repo does not flip the package.
+  There is **no REST endpoint for package visibility** — `gh api -X PATCH
+  /user/packages/container/pulsemq --field visibility=...` 404s regardless of
+  scopes (verified 2026-08-23); change it via the web UI instead:
+  <https://github.com/users/elpapimango/packages/container/pulsemq/settings>
+  → Danger Zone → Change visibility. The repo's own visibility *does* have a
+  CLI path: `gh repo edit elpapimango/pulsemq --visibility private
   --accept-visibility-change-consequences`.
 - **GitHub/GHCR**: repo `elpapimango/pulsemq`; image
   `ghcr.io/elpapimango/pulsemq`. Image pushes happen only via `docker.yml`
