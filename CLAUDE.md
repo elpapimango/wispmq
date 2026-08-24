@@ -313,9 +313,10 @@ does for config errors.
 
 ## Tests
 
-77 tests on default features (83 with `--features otel`), plus two `#[ignore]`d
-benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`, `config`, `auth`,
-`storage`, `metrics`, `otel`); integration suites are in `tests/`:
+95 tests on default features (101 with `--features otel`), plus four
+`#[ignore]`d benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`,
+`config`, `auth`, `storage`, `metrics`, `otel`); integration suites are in
+`tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
@@ -348,6 +349,18 @@ benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`, `config`, `auth`,
   --test-threads=1` (they contaminate each other in parallel). Together with
   `topic::bench_matches` these are the measurements behind the 5C decisions —
   re-run them before claiming a routing optimization.
+- `tests/bench_load.rs` — **benchmarks, `#[ignore]`d.** Run with
+  `cargo test --release --test bench_load -- --ignored --nocapture
+  --test-threads=1`. Distinct from `bench_routing.rs`: these go over real TCP
+  loopback sockets (CONNECT-to-CONNACK latency as concurrent connections
+  scale; sustained fan-out publish throughput and end-to-end delivery
+  latency), so what's timed includes socket/framing/task overhead, not just
+  matching/delivery in isolation. The fan-out case also surfaces real
+  backpressure: QoS 0 deliberately drops on a full outbound channel
+  (`OUTBOUND_CHANNEL_CAPACITY`) rather than blocking, so a subscriber slower
+  than a fire-hosed publisher legitimately receives fewer messages than were
+  sent — the harness reports that delivered/sent ratio rather than asserting
+  an exact count.
 - `tests/otel.rs` — **`--features otel` only.** OTLP export against a fake
   collector (a TCP listener speaking just enough HTTP), asserting on what
   actually went over the socket: the `/v1/metrics` and `/v1/logs` paths, the
@@ -436,9 +449,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (77 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (95 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (83).
+  `cargo test --features otel` (101).
 
 ## Conventions
 

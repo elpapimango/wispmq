@@ -790,10 +790,19 @@ have acceptance criteria yet; scope one out before starting it.
 
 - [ ] **Continuous fuzzing** (`cargo-fuzz`/AFL) on the codec. `tests/malformed.rs`
       is a fixed corpus; a fuzz harness finds cases nobody thought to write.
-- [ ] **Load/throughput benchmark harness** — many concurrent clients, sustained
-      publish rate, latency/memory under real load. Distinct from the routing
-      microbenchmarks in `tests/bench_routing.rs` (those measure matching/delivery
-      cost in isolation, not end-to-end connection load).
+- [x] **Load/throughput benchmark harness** — ✅ done. `tests/bench_load.rs`
+      (`#[ignore]`d, same run recipe as `bench_routing.rs`): CONNECT-to-CONNACK
+      latency as concurrent connections scale (10/100/500/1000), and sustained
+      fan-out publish throughput + end-to-end delivery latency (1/10/100
+      subscribers). Goes over real TCP loopback sockets — distinct from
+      `tests/bench_routing.rs`, which drives `Broker::inject_publish` directly
+      and so measures matching/delivery cost in isolation, not socket/framing/
+      task overhead. Memory sampling was scoped out: RSS is better read
+      externally (`ps`/`valgrind massif`) while the benchmark runs than baked
+      into the harness as OS-specific code for one number. The fan-out
+      benchmark also surfaces real backpressure — QoS 0 drops on a full
+      outbound channel rather than blocking, so it reports delivered/sent
+      ratio rather than asserting an exact count.
 - [x] **Connection-rate / per-IP limiting** — ✅ done. A fixed-window
       per-source-IP limiter (`src/ratelimit.rs`, `RateLimiter`) guards the
       MQTT TCP/TLS and WebSocket listeners (`server::run`/`run_ws`), sharing
