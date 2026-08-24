@@ -257,3 +257,48 @@ async fn qos2_pubrec_error_gets_no_pubrel() {
         panic!("broker sent {pkt:?} after an error PUBREC; expected nothing");
     }
 }
+
+#[tokio::test]
+async fn reserved_client_ids_are_rejected() {
+    // Client IDs starting with `$bridge/` or `$SYS/` are reserved for internal
+    // use and must be rejected with ClientIdentifierNotValid (0x85) to prevent
+    // session takeover attacks where a network client claims a bridge's ID and
+    // inherits its privileged subscriptions.
+    let addr = start_broker().await;
+
+    // Attempt to connect with a bridge-namespace client ID.
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    write_packet(&mut stream, &connect_packet("$bridge/attacker"), V5)
+        .await
+        .unwrap();
+    match read_packet(&mut stream, 1 << 20, V5).await.unwrap() {
+        ReadOutcome::Packet(Packet::Connack(c), _) => {
+            assert_eq!(
+                c.reason_code,
+                ReasonCode::ClientIdentifierNotValid,
+                "expected ClientIdentifierNotValid for $bridge/ prefix"
+            );
+        }
+        other => panic!("expected CONNACK rejection, got {:?}", other.is_eof()),
+    }
+
+    // Attempt to connect with a $SYS/ prefix.
+    let mut stream2 = TcpStream::connect(&addr).await.unwrap();
+    write_packet(&mut stream2, &connect_packet("$SYS/malicious"), V5)
+        .await
+        .unwrap();
+    match read_packet(&mut stream2, 1 << 20, V5).await.unwrap() {
+        ReadOutcome::Packet(Packet::Connack(c), _) => {
+            assert_eq!(
+                c.reason_code,
+                ReasonCode::ClientIdentifierNotValid,
+                "expected ClientIdentifierNotValid for $SYS/ prefix"
+            );
+        }
+        other => panic!("expected CONNACK rejection, got {:?}", other.is_eof()),
+    }
+
+    // Verify that a normal client ID still works.
+    let _normal = connect(&addr, "normal-client").await;
+}
+

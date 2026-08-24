@@ -155,6 +155,16 @@ impl Broker {
     ) -> Broker {
         let mut sessions = HashMap::new();
         for rec in loaded.sessions {
+            // Skip sessions with reserved client IDs. These should never appear
+            // in storage (the CONNECT path rejects them), but if the database
+            // was tampered with or corrupted, do not load them.
+            if rec.client_id.starts_with("$bridge/") || rec.client_id.starts_with("$SYS/") {
+                tracing::warn!(
+                    "skipping persisted session with reserved client_id {:?}",
+                    rec.client_id
+                );
+                continue;
+            }
             let mut s = Session::new(rec.client_id.clone(), rec.session_expiry_interval);
             // A session that was on disk is by definition persistent.
             s.persistent = true;
