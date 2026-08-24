@@ -333,7 +333,13 @@ async fn expired_retained_messages_are_excluded_and_purged() {
 
     let mut c = connect(addr, "expiring-retainer").await;
     let mut props = Properties::new();
-    props.message_expiry_interval = Some(1);
+    // 3s, not 1s: connect()+write_packet()+broker processing must land the
+    // "before expiry" check below comfortably inside this window even on a
+    // loaded CI runner. A 1s interval against ~350ms of intentional sleep
+    // left almost no slack, and flaked for real under GitHub Actions'
+    // shared runners (message already expired by the time the assertion
+    // ran, wrongly reading as a broker bug).
+    props.message_expiry_interval = Some(3);
     let p = Packet::Publish(Publish {
         dup: false,
         qos: QoS::AtMostOnce,
@@ -355,7 +361,7 @@ async fn expired_retained_messages_are_excluded_and_purged() {
     // After expiry: excluded from the gauges, and purged from the map (not
     // just hidden) -- a later `retained()` call reflects the same removal
     // whether or not `snapshot()` was called in between.
-    sleep(Duration::from_millis(1200)).await;
+    sleep(Duration::from_millis(3200)).await;
     let snap = broker.snapshot();
     assert_eq!(
         snap.retained_messages, 0,
