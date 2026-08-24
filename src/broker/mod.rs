@@ -158,6 +158,8 @@ impl Broker {
             let mut s = Session::new(rec.client_id.clone(), rec.session_expiry_interval);
             // A session that was on disk is by definition persistent.
             s.persistent = true;
+            // Restore the owner identity from storage.
+            s.identity = rec.owner_identity.clone();
             for sub in rec.subscriptions {
                 let parsed = topic::parse_filter(&sub.filter);
                 let (share_name, filter) = match parsed {

@@ -30,7 +30,7 @@ impl Broker {
                 if s.persistent {
                     self.inner
                         .storage
-                        .upsert_session(client_id.to_string(), s.session_expiry_interval);
+                        .upsert_session(client_id.to_string(), s.session_expiry_interval, s.identity.clone());
                 }
             }
         }
