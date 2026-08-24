@@ -14,7 +14,7 @@ impl Broker {
     pub(super) fn handle_publish(
         &self,
         client_id: &str,
-        _epoch: u64,
+        epoch: u64,
         mut publish: Publish,
     ) -> Action {
         Metrics::inc(&self.inner.metrics.publish_received);
@@ -30,6 +30,23 @@ impl Broker {
         }
 
         let mut st = self.lock();
+
+        // Epoch validation: reject packets from superseded connections (takeover).
+        // The session is resolved by Client ID, so without this check a stale
+        // connection could publish using the replacement session's identity and
+        // authorization context after takeover.
+        if let Some(session) = st.sessions.get(client_id) {
+            if session.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} PUBLISH rejected: stale epoch {epoch} != current {}",
+                    session.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
+        } else {
+            // Session no longer exists; the connection should have been closed.
+            return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+        }
 
         // Topic Alias resolution (3.3.2.3.4).
         if let Some(alias) = publish.properties.topic_alias {
@@ -171,9 +188,17 @@ impl Broker {
     // Acknowledgements for our outbound messages
     // ---------------------------------------------------------------------
 
-    pub(super) fn handle_puback(&self, client_id: &str, _epoch: u64, ack: PubAck) -> Action {
+    pub(super) fn handle_puback(&self, client_id: &str, epoch: u64, ack: PubAck) -> Action {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
+            // Epoch validation: reject acks from superseded connections.
+            if s.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} PUBACK rejected: stale epoch {epoch} != current {}",
+                    s.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
             s.awaiting_puback.remove(&ack.packet_id);
             let dropped = flush_queue(s);
             if dropped > 0 {
@@ -183,9 +208,17 @@ impl Broker {
         Action::Continue
     }
 
-    pub(super) fn handle_pubrec(&self, client_id: &str, _epoch: u64, ack: PubAck) -> Action {
+    pub(super) fn handle_pubrec(&self, client_id: &str, epoch: u64, ack: PubAck) -> Action {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
+            // Epoch validation: reject acks from superseded connections.
+            if s.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} PUBREC rejected: stale epoch {epoch} != current {}",
+                    s.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
             let known = s.awaiting_pubrec.remove(&ack.packet_id).is_some();
             if known && ack.reason_code.is_error() {
                 // Client rejected the message (MQTT-4.3.3-4): no PUBREL, and
@@ -209,9 +242,17 @@ impl Broker {
         Action::Continue
     }
 
-    pub(super) fn handle_pubrel(&self, client_id: &str, _epoch: u64, ack: PubAck) -> Action {
+    pub(super) fn handle_pubrel(&self, client_id: &str, epoch: u64, ack: PubAck) -> Action {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
+            // Epoch validation: reject acks from superseded connections.
+            if s.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} PUBREL rejected: stale epoch {epoch} != current {}",
+                    s.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
             let existed = s.inbound_qos2.remove(&ack.packet_id);
             let rc = if existed {
                 ReasonCode::Success
@@ -228,9 +269,17 @@ impl Broker {
         Action::Continue
     }
 
-    pub(super) fn handle_pubcomp(&self, client_id: &str, _epoch: u64, ack: PubAck) -> Action {
+    pub(super) fn handle_pubcomp(&self, client_id: &str, epoch: u64, ack: PubAck) -> Action {
         let mut st = self.lock();
         if let Some(s) = st.sessions.get_mut(client_id) {
+            // Epoch validation: reject acks from superseded connections.
+            if s.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} PUBCOMP rejected: stale epoch {epoch} != current {}",
+                    s.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
             s.awaiting_pubcomp.remove(&ack.packet_id);
             let dropped = flush_queue(s);
             if dropped > 0 {
