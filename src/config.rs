@@ -1,10 +1,17 @@
-//! Broker configuration, layered from four sources — defaults, a JSON config
+//! Broker configuration, layered from four sources — defaults, a TOML config
 //! file, environment variables, then command-line flags — each overriding the
 //! previous, so the server runs out of the box with nothing configured.
 //!
 //! [`Config::load`] drives the whole pipeline. The command-line layer lives in
-//! [`crate::cli`]; this module owns the defaults, the env layer, and the JSON
+//! [`crate::cli`]; this module owns the defaults, the env layer, and the TOML
 //! file layer.
+//!
+//! The TOML file is parsed into a `toml::Value`, then pivoted through
+//! [`serde_json::to_value`] into a `serde_json::Value` — every validation and
+//! field-assignment helper below (`j_str`/`j_bool`/`j_i64`/`j_u32`,
+//! [`crate::bridge::parse_bridges`], the `otlp_headers` walk) operates on that
+//! shared tree unchanged, so TOML support did not require a second copy of
+//! the validation logic.
 
 use std::net::SocketAddr;
 
@@ -15,7 +22,7 @@ use crate::cli::Cli;
 use crate::error::{MqttError, Result};
 use crate::types::QoS;
 
-/// Config-file keys recognised in the JSON config (mirrors the env/CLI options).
+/// Config-file keys recognised in the TOML config (mirrors the env/CLI options).
 const KNOWN_KEYS: &[&str] = &[
     "listen_addr",
     "admin_addr",
@@ -58,7 +65,7 @@ const KNOWN_KEYS: &[&str] = &[
 ];
 
 /// Default config-file names looked for in the working directory.
-const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.json"];
+const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.toml"];
 
 /// Crate version, surfaced by `--version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -287,7 +294,7 @@ pub struct Config {
     /// `discovery_prefix` on the Home Assistant side). Ignored unless
     /// `ha_discovery` is set.
     pub ha_discovery_prefix: String,
-    /// Path of the JSON config file that was loaded, if any (informational).
+    /// Path of the TOML config file that was loaded, if any (informational).
     pub config_file: Option<String>,
 }
 
@@ -510,7 +517,7 @@ fn overlay_opt(slot: &mut Option<String>, value: Option<String>) {
 }
 
 impl Config {
-    /// Full configuration pipeline: defaults, then a JSON config file (if any),
+    /// Full configuration pipeline: defaults, then a TOML config file (if any),
     /// then environment variables, then command-line flags — each layer
     /// overriding the previous.
     pub fn load() -> Result<Startup> {
@@ -524,7 +531,7 @@ impl Config {
     /// from [`Config::load`] so it does not depend on the process's argv.
     fn from_cli(cli: Cli) -> Result<Startup> {
         // `--hash-password` is a one-shot helper: answer it before reading the
-        // config file, so a broken pulsemq.json cannot block hashing a password.
+        // config file, so a broken pulsemq.toml cannot block hashing a password.
         if let Some(user) = cli.hash_password {
             return Ok(Startup::HashPassword(user));
         }
@@ -538,10 +545,10 @@ impl Config {
             .clone()
             .or_else(|| non_empty_env("MQTT_CONFIG_FILE"));
         match explicit {
-            Some(path) => cfg.apply_json_file(&path)?,
+            Some(path) => cfg.apply_toml_file(&path)?,
             None => {
                 if let Some(path) = default_config_file() {
-                    cfg.apply_json_file(&path)?;
+                    cfg.apply_toml_file(&path)?;
                 }
             }
         }
@@ -551,31 +558,33 @@ impl Config {
         Ok(Startup::Run(Box::new(cfg)))
     }
 
-    /// Read and apply a JSON config file, recording its path.
-    pub fn apply_json_file(&mut self, path: &str) -> Result<()> {
+    /// Read and apply a TOML config file, recording its path.
+    pub fn apply_toml_file(&mut self, path: &str) -> Result<()> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| MqttError::Config(format!("read config file {path}: {e}")))?;
-        self.apply_json_str(&text, path)?;
+        self.apply_toml_str(&text, path)?;
         self.config_file = Some(path.to_string());
         Ok(())
     }
 
-    /// Overlay JSON config text onto this config. `source` names the file for
+    /// Overlay TOML config text onto this config. `source` names the file for
     /// error messages. Unknown keys and wrong value types are rejected.
-    pub fn apply_json_str(&mut self, text: &str, source: &str) -> Result<()> {
+    pub fn apply_toml_str(&mut self, text: &str, source: &str) -> Result<()> {
         // An entirely blank file is treated as "no overrides" rather than a
         // parse error, so touching the config file is harmless.
         if text.trim().is_empty() {
             return Ok(());
         }
-        let doc: Value = serde_json::from_str(text)
-            .map_err(|e| MqttError::Config(format!("{source}: invalid JSON: {e}")))?;
-        if doc.is_null() {
-            return Ok(());
-        }
+        let toml_doc: toml::Value = toml::from_str(text)
+            .map_err(|e| MqttError::Config(format!("{source}: invalid TOML: {e}")))?;
+        // Pivot through JSON: see the module doc comment. A parsed TOML
+        // document's root is always a table, so this can only ever produce a
+        // JSON object here, never `null` or a scalar.
+        let doc: Value = serde_json::to_value(toml_doc)
+            .map_err(|e| MqttError::Config(format!("{source}: {e}")))?;
         let Some(map) = doc.as_object() else {
             return Err(MqttError::Config(format!(
-                "{source}: top level must be a JSON object of \"option\": value pairs"
+                "{source}: top level must be a table of \"option\" = value pairs"
             )));
         };
         for key in map.keys() {
@@ -717,12 +726,12 @@ impl Config {
             self.otlp_logs = b;
         }
         // `otlp_headers` is the second structured option after `bridges`: a
-        // JSON object of header name to value.
+        // table of header name to value.
         let headers = &doc["otlp_headers"];
         if !headers.is_null() {
             let map = headers.as_object().ok_or_else(|| {
                 MqttError::Config(format!(
-                    "{source}: 'otlp_headers' must be an object of \"Name\": \"value\" pairs"
+                    "{source}: 'otlp_headers' must be a table of Name = \"value\" pairs"
                 ))
             })?;
             let mut pairs = Vec::with_capacity(map.len());
@@ -756,7 +765,7 @@ fn default_config_file() -> Option<String> {
 }
 
 /// Read a string value from the config object, erroring on a wrong type.
-/// A missing key and an explicit `null` both mean "not set".
+/// A missing key means "not set".
 fn j_str(doc: &Value, key: &str, source: &str) -> Result<Option<String>> {
     let v = &doc[key];
     if v.is_null() {
@@ -772,7 +781,7 @@ fn j_str(doc: &Value, key: &str, source: &str) -> Result<Option<String>> {
 }
 
 /// Read an integer value from the config object, erroring on a wrong type.
-/// A JSON float (`5.5`) is rejected rather than silently truncated.
+/// A float (`5.5`) is rejected rather than silently truncated.
 fn j_i64(doc: &Value, key: &str, source: &str) -> Result<Option<i64>> {
     let v = &doc[key];
     if v.is_null() {
@@ -859,23 +868,23 @@ mod tests {
     // precedence over the env and file layers exercised here.
 
     #[test]
-    fn json_config_applies_all_field_kinds() {
-        let json = r#"{
-  "listen_addr": "127.0.0.1:1884",
-  "ws_listen_addr": "0.0.0.0:8080",
-  "tls_cert": "server.pem",
-  "admin_token": "sekret",
-  "acl_path": "acl.json",
-  "db_path": "/data/broker.db",
-  "max_packet_size": 2097152,
-  "receive_maximum": 100,
-  "max_session_expiry": 600,
-  "max_queued_messages": 42,
-  "max_connections_per_ip": 20,
-  "connection_rate_window_secs": 5
-}"#;
+    fn toml_config_applies_all_field_kinds() {
+        let toml = r#"
+listen_addr = "127.0.0.1:1884"
+ws_listen_addr = "0.0.0.0:8080"
+tls_cert = "server.pem"
+admin_token = "sekret"
+acl_path = "acl.json"
+db_path = "/data/broker.db"
+max_packet_size = 2097152
+receive_maximum = 100
+max_session_expiry = 600
+max_queued_messages = 42
+max_connections_per_ip = 20
+connection_rate_window_secs = 5
+"#;
         let mut cfg = Config::default();
-        cfg.apply_json_str(json, "test.json").unwrap();
+        cfg.apply_toml_str(toml, "test.toml").unwrap();
         assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
         assert_eq!(
             cfg.ws_listen_addr.map(|a| a.to_string()).as_deref(),
@@ -908,44 +917,44 @@ mod tests {
         assert_eq!(Config::default().max_queued_messages, 1000);
 
         let mut cfg = Config::default();
-        cfg.apply_json_str(r#"{"max_queued_messages": 5}"#, "t.json")
+        cfg.apply_toml_str("max_queued_messages = 5", "t.toml")
             .unwrap();
         assert_eq!(cfg.max_queued_messages, 5);
 
         // 0 is a legal opt-out, not a parse error.
         let mut cfg = Config::default();
-        cfg.apply_json_str(r#"{"max_queued_messages": 0}"#, "t.json")
+        cfg.apply_toml_str("max_queued_messages = 0", "t.toml")
             .unwrap();
         assert_eq!(cfg.max_queued_messages, 0);
     }
 
     #[test]
-    fn json_rejects_unknown_key_and_bad_type() {
+    fn toml_rejects_unknown_key_and_bad_type() {
+        let mut cfg = Config::default();
+        assert!(cfg.apply_toml_str("listen_port = 1883", "t.toml").is_err());
         let mut cfg = Config::default();
         assert!(cfg
-            .apply_json_str(r#"{"listen_port": 1883}"#, "t.json")
+            .apply_toml_str(r#"receive_maximum = "lots""#, "t.toml")
             .is_err());
+        // Malformed TOML is a clear error, not a silent no-op. TOML's own
+        // syntax already rules out a valid-but-wrong-shaped top level (unlike
+        // JSON, a document can't parse to anything but a table of keys), so
+        // this exercises the parser's error path instead.
         let mut cfg = Config::default();
-        assert!(cfg
-            .apply_json_str(r#"{"receive_maximum": "lots"}"#, "t.json")
-            .is_err());
-        let mut cfg = Config::default();
-        // Top level must be an object, not an array.
-        assert!(cfg.apply_json_str("[1, 2]", "t.json").is_err());
-        // Malformed JSON is a clear error, not a silent no-op.
-        assert!(cfg.apply_json_str("{not json", "t.json").is_err());
+        assert!(cfg.apply_toml_str("key = ", "t.toml").is_err());
+        assert!(cfg.apply_toml_str("[1, 2]", "t.toml").is_err());
         // A float where an integer is required must not be truncated.
         assert!(cfg
-            .apply_json_str(r#"{"receive_maximum": 5.5}"#, "t.json")
+            .apply_toml_str("receive_maximum = 5.5", "t.toml")
             .is_err());
     }
 
     #[test]
-    fn json_protocol_capabilities() {
-        let json = r#"{"maximum_qos": 1, "retain_available": false,
-                       "topic_alias_maximum": 5, "server_keep_alive": 30}"#;
+    fn toml_protocol_capabilities() {
+        let toml = "maximum_qos = 1\nretain_available = false\n\
+                     topic_alias_maximum = 5\nserver_keep_alive = 30";
         let mut cfg = Config::default();
-        cfg.apply_json_str(json, "t.json").unwrap();
+        cfg.apply_toml_str(toml, "t.toml").unwrap();
         assert_eq!(cfg.maximum_qos, QoS::AtLeastOnce);
         assert!(!cfg.retain_available);
         assert_eq!(cfg.topic_alias_maximum, 5);
@@ -953,13 +962,11 @@ mod tests {
 
         // Out-of-range QoS is rejected.
         let mut bad = Config::default();
-        assert!(bad
-            .apply_json_str(r#"{"maximum_qos": 3}"#, "t.json")
-            .is_err());
+        assert!(bad.apply_toml_str("maximum_qos = 3", "t.toml").is_err());
         // Wrong type for a boolean is rejected.
         let mut bad = Config::default();
         assert!(bad
-            .apply_json_str(r#"{"retain_available": "yes"}"#, "t.json")
+            .apply_toml_str(r#"retain_available = "yes""#, "t.toml")
             .is_err());
     }
 
@@ -968,11 +975,12 @@ mod tests {
         let mut cfg = Config::default();
         // A blank or whitespace-only file means "no overrides", so creating the
         // file before filling it in is not a startup failure.
-        assert!(cfg.apply_json_str("", "t.json").is_ok());
-        assert!(cfg.apply_json_str("   \n\t\n", "t.json").is_ok());
-        // An empty object and an explicit null are also no-ops.
-        assert!(cfg.apply_json_str("{}", "t.json").is_ok());
-        assert!(cfg.apply_json_str("null", "t.json").is_ok());
+        assert!(cfg.apply_toml_str("", "t.toml").is_ok());
+        assert!(cfg.apply_toml_str("   \n\t\n", "t.toml").is_ok());
+        // A comment-only file is also a no-op.
+        assert!(cfg
+            .apply_toml_str("# nothing configured yet\n", "t.toml")
+            .is_ok());
     }
 
     #[test]
@@ -989,18 +997,20 @@ mod tests {
     }
 
     #[test]
-    fn json_otlp_options() {
-        let json = r#"{
-  "otlp_endpoint": "http://127.0.0.1:4318",
-  "otlp_protocol": "http",
-  "otlp_headers": { "DD-API-KEY": "abc123" },
-  "otlp_interval": 5,
-  "otlp_metrics": true,
-  "otlp_logs": false,
-  "service_name": "edge-1"
-}"#;
+    fn toml_otlp_options() {
+        let toml = r#"
+otlp_endpoint = "http://127.0.0.1:4318"
+otlp_protocol = "http"
+otlp_interval = 5
+otlp_metrics = true
+otlp_logs = false
+service_name = "edge-1"
+
+[otlp_headers]
+"DD-API-KEY" = "abc123"
+"#;
         let mut cfg = Config::default();
-        cfg.apply_json_str(json, "t.json").unwrap();
+        cfg.apply_toml_str(toml, "t.toml").unwrap();
         assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://127.0.0.1:4318"));
         assert_eq!(cfg.otlp_interval, 5);
         assert!(cfg.otlp_metrics);
@@ -1014,11 +1024,11 @@ mod tests {
         // Wrong shapes are rejected rather than silently dropping the headers.
         let mut bad = Config::default();
         assert!(bad
-            .apply_json_str(r#"{"otlp_headers": ["DD-API-KEY=x"]}"#, "t.json")
+            .apply_toml_str(r#"otlp_headers = ["DD-API-KEY=x"]"#, "t.toml")
             .is_err());
         let mut bad = Config::default();
         assert!(bad
-            .apply_json_str(r#"{"otlp_headers": {"DD-API-KEY": 5}}"#, "t.json")
+            .apply_toml_str(r#"otlp_headers = { "DD-API-KEY" = 5 }"#, "t.toml")
             .is_err());
     }
 
@@ -1027,7 +1037,7 @@ mod tests {
         // The whole point of wrapping them: `{cfg:?}` is one keystroke away
         // from a log line, and these values are vendor API keys.
         let mut cfg = Config::default();
-        cfg.apply_json_str(r#"{"otlp_headers": {"DD-API-KEY": "s3cret"}}"#, "t.json")
+        cfg.apply_toml_str(r#"otlp_headers = { "DD-API-KEY" = "s3cret" }"#, "t.toml")
             .unwrap();
         let rendered = format!("{cfg:?}");
         assert!(!rendered.contains("s3cret"), "{rendered}");
@@ -1084,11 +1094,11 @@ mod tests {
     }
 
     #[test]
-    fn json_ha_discovery_options() {
+    fn toml_ha_discovery_options() {
         let mut cfg = Config::default();
-        cfg.apply_json_str(
-            r#"{"ha_discovery": true, "ha_discovery_prefix": "hass"}"#,
-            "t.json",
+        cfg.apply_toml_str(
+            "ha_discovery = true\nha_discovery_prefix = \"hass\"",
+            "t.toml",
         )
         .unwrap();
         assert!(cfg.ha_discovery);
@@ -1096,25 +1106,54 @@ mod tests {
 
         let mut bad = Config::default();
         assert!(bad
-            .apply_json_str(r#"{"ha_discovery": "yes"}"#, "t.json")
+            .apply_toml_str(r#"ha_discovery = "yes""#, "t.toml")
             .is_err());
     }
 
     #[test]
-    fn comments_are_rejected_as_invalid_json() {
-        // Documents a deliberate trade-off of the move from YAML: the config is
-        // strict JSON, so the annotated example that YAML allowed is gone and
-        // per-option documentation lives in the README instead. A `#` line is a
-        // parse error rather than being silently ignored, so anyone porting a
-        // commented pulsemq.yaml is told plainly instead of having options
-        // quietly dropped.
+    fn toml_bridges_array_of_tables() {
+        // The structural stress case for the TOML->JSON pivot: a nested
+        // array-of-tables (`[[bridges]]` each with its own `[[bridges.topics]]`)
+        // must come out the other side exactly like the equivalent JSON array
+        // of objects did.
+        let toml = r#"
+[[bridges]]
+name = "edge-1"
+address = "tcp://broker.example.com:1883"
+
+[[bridges.topics]]
+pattern = "sensors/#"
+direction = "out"
+qos = 1
+"#;
         let mut cfg = Config::default();
-        assert!(cfg.apply_json_str("# just a comment\n", "t.json").is_err());
-        assert!(cfg
-            .apply_json_str(
-                "{\n  // listener\n  \"listen_addr\": \"0.0.0.0:1\"\n}",
-                "t.json"
-            )
-            .is_err());
+        cfg.apply_toml_str(toml, "t.toml").unwrap();
+        assert_eq!(cfg.bridges.len(), 1);
+        let b = &cfg.bridges[0];
+        assert_eq!(b.name, "edge-1");
+        assert_eq!(b.address, "tcp://broker.example.com:1883");
+        assert_eq!(b.topics.len(), 1);
+        assert_eq!(b.topics[0].pattern, "sensors/#");
+        assert!(matches!(
+            b.topics[0].direction,
+            crate::bridge::Direction::Out
+        ));
+        assert_eq!(b.topics[0].qos, QoS::AtLeastOnce);
+    }
+
+    #[test]
+    fn comments_are_supported_in_toml() {
+        // Unlike the JSON config this replaced (see git history:
+        // `comments_are_rejected_as_invalid_json`), TOML's native `#`
+        // comments work — annotating an option no longer has to live only in
+        // the README — while staying just as strict about unknown keys and
+        // wrong types.
+        let mut cfg = Config::default();
+        cfg.apply_toml_str(
+            "# listener\nlisten_addr = \"0.0.0.0:1\" # inline comment too\n",
+            "t.toml",
+        )
+        .unwrap();
+        assert_eq!(cfg.listen_addr.to_string(), "0.0.0.0:1");
     }
 }

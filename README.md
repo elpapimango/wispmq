@@ -135,7 +135,7 @@ architecture with `docker buildx build --platform linux/arm64 -t pulsemq .`.
 
 ## Configuration
 
-Every setting can be provided three ways — a **JSON config file**, an
+Every setting can be provided three ways — a **TOML config file**, an
 **environment variable**, or a **command-line flag** — layered in this order of
 increasing precedence:
 
@@ -143,7 +143,7 @@ increasing precedence:
 defaults  <  config file  <  environment variables  <  command-line flags
 ```
 
-The config file is discovered automatically: if `pulsemq.json` exists in the
+The config file is discovered automatically: if `pulsemq.toml` exists in the
 working directory it is loaded. A different path can be given with
 `--config <FILE>` or `MQTT_CONFIG_FILE`; an explicitly named file that is
 missing or invalid is a startup error. Unknown keys and wrong value types are
@@ -152,46 +152,46 @@ rejected, so a typo fails loudly at startup instead of being ignored.
 Keys are the option names with underscores (e.g. `listen_addr`) — the same
 names as the environment variables minus the `MQTT_` prefix, and the same as
 the CLI flags with `-` replaced by `_`. A minimal, ready-to-copy file ships as
-[`pulsemq.example.json`](pulsemq.example.json).
+[`pulsemq.example.toml`](pulsemq.example.toml).
 
-Because JSON has no comment syntax, every option is documented in the table
-below rather than inline in the example file. A full file looks like:
+TOML supports `#` comments, so annotate the file however you like; the table
+below is still the authoritative per-option reference. A full file looks like:
 
-```json
-{
-  "listen_addr": "0.0.0.0:1883",
-  "tls_cert": "certs/server.pem",
-  "tls_key": "certs/server.key",
-  "tls_client_ca": "certs/ca.pem",
+```toml
+listen_addr = "0.0.0.0:1883"
+tls_cert = "certs/server.pem"
+tls_key = "certs/server.key"
+tls_client_ca = "certs/ca.pem"
 
-  "ws_listen_addr": "0.0.0.0:8080",
+ws_listen_addr = "0.0.0.0:8080"
 
-  "admin_addr": "127.0.0.1:9001",
-  "admin_token": "change-me",
-  "acl_path": "acl.json",
+admin_addr = "127.0.0.1:9001"
+admin_token = "change-me"
+acl_path = "acl.json"
 
-  "db_path": "mqtt_broker.db",
-  "max_packet_size": 1048576,
-  "receive_maximum": 64,
-  "max_session_expiry": 3600,
-  "max_queued_messages": 1000,
-  "max_connections_per_ip": 0,
-  "connection_rate_window_secs": 10,
-  "sys_interval": 10,
+db_path = "mqtt_broker.db"
+max_packet_size = 1048576
+receive_maximum = 64
+max_session_expiry = 3600
+max_queued_messages = 1000
+max_connections_per_ip = 0
+connection_rate_window_secs = 10
+sys_interval = 10
 
-  "maximum_qos": 2,
-  "retain_available": true,
-  "topic_alias_maximum": 16,
-  "server_keep_alive": 60,
+maximum_qos = 2
+retain_available = true
+topic_alias_maximum = 16
+server_keep_alive = 60
 
-  "otlp_endpoint": "http://127.0.0.1:4318",
-  "otlp_headers": { "DD-API-KEY": "..." },
-  "otlp_interval": 60,
-  "service_name": "pulsemq",
+otlp_endpoint = "http://127.0.0.1:4318"
+otlp_interval = 60
+service_name = "pulsemq"
 
-  "ha_discovery": false,
-  "ha_discovery_prefix": "homeassistant"
-}
+ha_discovery = false
+ha_discovery_prefix = "homeassistant"
+
+[otlp_headers]
+"DD-API-KEY" = "..."
 ```
 
 `tls_client_ca` enables mutual TLS; `ws_tls_cert`/`ws_tls_key` put the
@@ -201,6 +201,9 @@ build with `--features otel` (see
 [OTLP telemetry export](#otlp-telemetry-export-push)); `ha_discovery` turns on
 Home Assistant MQTT Discovery (see
 [below](#home-assistant-mqtt-discovery)). Omit any key to keep its default.
+`otlp_headers` is a table (`[otlp_headers]`) and, like every other TOML table,
+must come after any plain `key = value` lines in the file — TOML syntax
+requires it.
 
 ## Command-line options
 
@@ -217,7 +220,7 @@ Options:
   -V, --version  Print version
 
 Config file:
-      --config <FILE>               Load this JSON config file [MQTT_CONFIG_FILE]
+      --config <FILE>               Load this TOML config file [MQTT_CONFIG_FILE]
 Network:
       --listen-addr <ADDR>          MQTT listener bind address [MQTT_LISTEN_ADDR]
       --admin-addr <ADDR>           Admin/metrics/MCP HTTP bind address [MQTT_ADMIN_ADDR]
@@ -381,7 +384,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
 ```
 
 ```
-$SYS/broker/version PulseMQ 0.9.2
+$SYS/broker/version PulseMQ 0.9.3
 $SYS/broker/uptime 15 seconds
 $SYS/broker/clients/connected 1
 $SYS/broker/clients/total 1
@@ -423,19 +426,17 @@ Running Home Assistant OS or Supervised? [**pulsemq-addon**](https://github.com/
 installs PulseMQ straight from the Add-on Store (`ha_discovery` on by
 default) — no manual Docker setup needed. Otherwise, wire it up by hand:
 
-Set `ha_discovery: true` (or `--ha-discovery` / `MQTT_HA_DISCOVERY=true`) and
+Set `ha_discovery = true` (or `--ha-discovery` / `MQTT_HA_DISCOVERY=true`) and
 PulseMQ publishes retained [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
 config for every statistic in the metrics list, plus its current value —
 Home Assistant's own MQTT integration then auto-creates a sensor entity per
 statistic with no add-on, custom component, or `configuration.yaml` edit on
 the HA side. Off by default.
 
-```json
-{
-  "ha_discovery": true,
-  "ha_discovery_prefix": "homeassistant",
-  "service_name": "pulsemq"
-}
+```toml
+ha_discovery = true
+ha_discovery_prefix = "homeassistant"
+service_name = "pulsemq"
 ```
 
 `ha_discovery_prefix` must match Home Assistant's own discovery prefix
@@ -451,7 +452,7 @@ pulsemq/pulsemq/mqtt_clients_connected  1
 
 This rides `sys_interval` for its refresh cadence — discovery config is
 published once at startup (it is static), state values on every tick — so
-`sys_interval: 0` disables both this and `$SYS`. Like `$SYS`, these are
+`sys_interval = 0` disables both this and `$SYS`. Like `$SYS`, these are
 excluded from `mqtt_retained_messages`/`retained_bytes`/`list_retained`
 (they are broker-owned bookkeeping, not user data) and are retained in memory
 only, never written to SQLite.
@@ -475,16 +476,16 @@ A build without the feature still parses and validates the `otlp_*` config
 keys, so one config file works against both — and warns loudly at startup if
 export is configured but not compiled in, rather than silently doing nothing.
 
-```json
-{
-  "otlp_endpoint": "http://127.0.0.1:4318",
-  "otlp_protocol": "http",
-  "otlp_headers": { "DD-API-KEY": "..." },
-  "otlp_interval": 60,
-  "otlp_metrics": true,
-  "otlp_logs": true,
-  "service_name": "pulsemq"
-}
+```toml
+otlp_endpoint = "http://127.0.0.1:4318"
+otlp_protocol = "http"
+otlp_interval = 60
+otlp_metrics = true
+otlp_logs = true
+service_name = "pulsemq"
+
+[otlp_headers]
+"DD-API-KEY" = "..."
 ```
 
 - **`otlp_endpoint`** is a *base* URL; `/v1/metrics` and `/v1/logs` are
@@ -566,7 +567,7 @@ implemented; a `GET /mcp` returns 405.)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MQTT_CONFIG_FILE` | _(auto)_ | JSON config file path (else `pulsemq.json` in cwd) |
+| `MQTT_CONFIG_FILE` | _(auto)_ | TOML config file path (else `pulsemq.toml` in cwd) |
 | `MQTT_LISTEN_ADDR` | `0.0.0.0:1883` | MQTT listener bind address |
 | `MQTT_TLS_CERT` / `MQTT_TLS_KEY` | _(unset)_ | PEM cert + key; both set = TLS on the MQTT port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
@@ -805,31 +806,36 @@ PulseMQ can **forward** messages to and from remote MQTT brokers (like a
 mosquitto bridge) — e.g. to aggregate edge brokers up to a central one, or fan a
 central broker's topics down to the edge. Each bridge is an outbound MQTT client
 in its own task with **automatic reconnect + backoff**, over any transport
-(`tcp`/`tls`/`ws`/`wss`). Bridges are configured as an array in the JSON config
-file (config-file only):
+(`tcp`/`tls`/`ws`/`wss`). Bridges are configured as an array of tables in the
+TOML config file (config-file only):
 
-```json
-{
-  "bridges": [
-    {
-      "name": "central",
-      "address": "tls://central.example:8883",
-      "client_id": "pulsemq-edge-1",
-      "username": "edge",
-      "password": "secret",
-      "keepalive": 30,
-      "protocol_version": 5,
-      "tls_ca": "certs/ca.pem",
-      "tls_cert": "certs/edge.pem",
-      "tls_key": "certs/edge.key",
-      "topics": [
-        { "pattern": "sensors/#", "direction": "out", "qos": 1 },
-        { "pattern": "cmd/#", "direction": "in", "qos": 1 },
-        { "pattern": "state/#", "direction": "both", "qos": 0 }
-      ]
-    }
-  ]
-}
+```toml
+[[bridges]]
+name = "central"
+address = "tls://central.example:8883"
+client_id = "pulsemq-edge-1"
+username = "edge"
+password = "secret"
+keepalive = 30
+protocol_version = 5
+tls_ca = "certs/ca.pem"
+tls_cert = "certs/edge.pem"
+tls_key = "certs/edge.key"
+
+[[bridges.topics]]
+pattern = "sensors/#"
+direction = "out"
+qos = 1
+
+[[bridges.topics]]
+pattern = "cmd/#"
+direction = "in"
+qos = 1
+
+[[bridges.topics]]
+pattern = "state/#"
+direction = "both"
+qos = 0
 ```
 
 | Key | Required | Notes |

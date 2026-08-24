@@ -52,6 +52,11 @@ start at 0.9.0 before those tags/Releases/images existed for long; 0.9.0 and
 notes, not separate tags or Releases — **v0.9.2 is the only one that actually
 exists.**
 
+`Cargo.toml` has since moved to a **0.9.3 waypoint** on `main` (same
+not-yet-tagged status 0.9.0/0.9.1 had): the config file format switched from
+JSON to TOML, a breaking change. See `CLAUDE.md`'s "Done since 0.9.0" list for
+detail.
+
 ---
 
 ## 1. Message forwarding (broker-to-broker bridge) — ✅ DONE

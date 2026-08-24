@@ -2,7 +2,7 @@
 //!
 //! Every field is an `Option` so that "the user did not pass this flag" stays
 //! distinguishable from "the user passed a value that happens to equal the
-//! default". The layered configuration (defaults < JSON file < env < CLI, see
+//! default". The layered configuration (defaults < TOML file < env < CLI, see
 //! [`crate::config`]) depends on that: [`Cli::apply`] is the last layer and
 //! only a `Some` overrides what the layers below decided.
 //!
@@ -28,13 +28,13 @@ use crate::types::QoS;
     version,
     about = "PulseMQ — an MQTT v5.0 / v3.1.1 / v3.1 broker (Tokio + SQLite)",
     after_help = "Every option can also be set via the environment variable shown in brackets, or \
-                  in a JSON config file (key = the option name with underscores, e.g. \
+                  in a TOML config file (key = the option name with underscores, e.g. \
                   listen_addr). Precedence, lowest to highest: config file < environment < \
                   command-line flags.\n\nFlags accept either `--flag value` or `--flag=value`. \
                   Logging verbosity is controlled by RUST_LOG (default: info)."
 )]
 pub(crate) struct Cli {
-    /// Load this JSON config file [MQTT_CONFIG_FILE]. If omitted, pulsemq.json
+    /// Load this TOML config file [MQTT_CONFIG_FILE]. If omitted, pulsemq.toml
     /// in the working directory is used when present.
     #[arg(long, value_name = "FILE", help_heading = "Config file")]
     pub config: Option<String>,
@@ -509,10 +509,9 @@ mod tests {
     #[test]
     fn cli_flags_override_config_file() {
         let mut cfg = Config::default();
-        cfg.apply_json_str(
-            r#"{"listen_addr": "127.0.0.1:1", "receive_maximum": 5,
-                "max_queued_messages": 5}"#,
-            "t.json",
+        cfg.apply_toml_str(
+            "listen_addr = \"127.0.0.1:1\"\nreceive_maximum = 5\nmax_queued_messages = 5",
+            "t.toml",
         )
         .unwrap();
         parse(&[
@@ -538,9 +537,9 @@ mod tests {
         std::env::set_var("MQTT_DB_PATH", "from-env.db");
 
         let mut cfg = Config::default();
-        cfg.apply_json_str(
-            r#"{"receive_maximum": 5, "db_path": "from-file.db", "sys_interval": 5}"#,
-            "t.json",
+        cfg.apply_toml_str(
+            "receive_maximum = 5\ndb_path = \"from-file.db\"\nsys_interval = 5",
+            "t.toml",
         )
         .unwrap();
         cfg.apply_env();

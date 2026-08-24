@@ -12,7 +12,7 @@ TLS, WebSockets, WebSockets-over-TLS. Repo:
 https://github.com/elpapimango/pulsemq
 
 Display name is **PulseMQ**; the identifier everywhere (crate, binary, image,
-repo, default `pulsemq.json`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
+repo, default `pulsemq.toml`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
 metric names are intentionally kept — they describe the protocol, not the
 project.
 
@@ -40,6 +40,15 @@ breaking changes carried over from the 0.9.1 waypoint (JSON config move, the
 `HELP` library-API change), then the 0.9.2 OTLP addition. CI (`ci.yml`) and
 image builds (`docker.yml`) are green on `main`. `git log` has the detail —
 this is the map.
+
+`Cargo.toml` on `main` has since moved to a **0.9.3 waypoint** (same status as
+0.9.0/0.9.1 before them: real, in commit history, not yet a tag/Release/image)
+for **another breaking change** — the config file format switched from JSON
+to TOML (`config::Config::apply_toml_str`, replacing `apply_json_str`;
+`pulsemq.toml` replaces `pulsemq.json`; `pulsemq.example.toml` replaces
+`pulsemq.example.json`). The ACL policy file (`--acl-file`) is unaffected —
+still JSON, a separate document serving a different purpose. See "Done since
+0.9.0" below for what else has landed since 0.9.2.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
@@ -141,6 +150,24 @@ Done since 0.9.0:
   metrics and logs over OTLP/HTTP-protobuf; off unless `otlp_endpoint` is set.
   Landed with a refactor that makes the `Snapshot` reuse structural: see
   "Metrics and `$SYS`" below.
+- **Home Assistant MQTT Discovery** (`sysinfo.rs`, `ha_discovery`/
+  `ha_discovery_prefix`, off by default) — publishes retained HA discovery
+  config + state topics for every `Snapshot::series()` statistic, so Home
+  Assistant's own MQTT integration auto-creates sensor entities. Rides
+  `sys_interval` for its cadence. A companion Supervisor add-on repo,
+  [`pulsemq-addon`](https://github.com/elpapimango/pulsemq-addon), wraps the
+  published image for one-click install — no separate Rust build there.
+- **Config file switched from JSON to TOML** (0.9.3 waypoint, breaking) —
+  `apply_toml_str` replaces `apply_json_str`, parsing with the `toml` crate
+  and pivoting through `serde_json::Value` so the validation logic
+  (`KNOWN_KEYS`, `j_str`/`j_bool`/`j_i64`/`j_u32`, `bridge::parse_bridges`,
+  `otlp_headers`) stayed unchanged underneath it. Picked over JSON for the
+  ecosystem fit (Cargo's own format) and over YAML for `serde_yaml` being
+  archived/deprecated upstream; unlike the earlier JSON move, this one is not
+  a strictness-for-comments trade — TOML keeps the strict unknown-key/wrong-type
+  rejection *and* supports `#` comments. `bridges` reads more naturally too,
+  as `[[bridges]]`/`[[bridges.topics]]` array-of-tables instead of a JSON
+  array of objects.
 
 **Nothing is left on the roadmap** — every numbered item in `TODO.md` is done.
 Item 6 shipped as the **v0.9.2** release.
@@ -288,19 +315,19 @@ ACL (`--acl-file`), which is `RwLock<Arc<Acl>>` and hot-reloaded on SIGHUP
 
 ## Configuration
 
-Precedence, lowest to highest: **defaults < JSON config file < env vars < CLI
-flags**. Entry point is `Config::load()`. `pulsemq.json` in the cwd is
+Precedence, lowest to highest: **defaults < TOML config file < env vars < CLI
+flags**. Entry point is `Config::load()`. `pulsemq.toml` in the cwd is
 auto-loaded; `--config` / `MQTT_CONFIG_FILE` overrides. When adding a new option,
 wire it in **all** places: the `Config` struct + `Default`, `apply_env`,
-the `cli::Cli` struct (+ its `apply`), `apply_json_str` (+ `KNOWN_KEYS`), the
-README tables, and `pulsemq.example.json`. There are unit tests in `cli` and
+the `cli::Cli` struct (+ its `apply`), `apply_toml_str` (+ `KNOWN_KEYS`), the
+README tables, and `pulsemq.example.toml`. There are unit tests in `cli` and
 `config` covering each layer — extend them.
 
-Two options are **structured** and so config-file-first: `bridges` (an array,
-config-file only) and `otlp_headers` (an object; also `MQTT_OTLP_HEADERS="K=V,K=V"`
-and repeated `--otlp-header K=V`). A credential value goes in `config::Secret`
-and its container gets a hand-written redacting `Debug` — `Config` derives
-`Debug` and is one `{cfg:?}` away from a log line.
+Two options are **structured** and so config-file-first: `bridges` (an array of
+tables, `[[bridges]]`, config-file only) and `otlp_headers` (a table, `[otlp_headers]`;
+also `MQTT_OTLP_HEADERS="K=V,K=V"` and repeated `--otlp-header K=V`). A credential
+value goes in `config::Secret` and its container gets a hand-written redacting
+`Debug` — `Config` derives `Debug` and is one `{cfg:?}` away from a log line.
 
 An option whose *value* needs validating beyond its type (`otlp_protocol`) is
 checked **once**, at startup, rather than per layer: the env layer cannot return
@@ -308,12 +335,20 @@ an error, so a per-layer check would silently ignore a bad env value while
 rejecting the same value from the config file.
 
 The whole config pipeline runs **before** the `tracing` subscriber exists, so a
-`warn!` in `apply_env`/`apply_json_str` goes nowhere — use `eprintln!`, as `main`
+`warn!` in `apply_env`/`apply_toml_str` goes nowhere — use `eprintln!`, as `main`
 does for config errors.
+
+`apply_toml_str` parses with the `toml` crate into a `toml::Value`, then
+pivots through `serde_json::to_value` into a `serde_json::Value` — every
+validation/assignment helper (`j_str`/`j_bool`/`j_i64`/`j_u32`,
+`bridge::parse_bridges`, the `otlp_headers` walk) still operates on that
+shared `Value` tree unchanged, so TOML support did not duplicate the
+validation logic. `KNOWN_KEYS` and per-option types are unaffected by the
+format.
 
 ## Tests
 
-95 tests on default features (101 with `--features otel`), plus four
+103 tests on default features (109 with `--features otel`), plus five
 `#[ignore]`d benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`,
 `config`, `auth`, `storage`, `metrics`, `otel`); integration suites are in
 `tests/`:
@@ -449,9 +484,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (95 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (103 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (101).
+  `cargo test --features otel` (109).
 
 ## Conventions
 
@@ -460,11 +495,11 @@ Notes for picking up in a new session/machine:
   **non-default Cargo feature** (`otel` is the precedent — `cargo tree` must
   show none of it in the default build).
 - When adding a config option, wire it through Config + Default, `apply_env`,
-  the `cli::Cli` struct (+ its `apply`), `apply_json_str` (+ `KNOWN_KEYS`),
-  README, and `pulsemq.example.json` — with tests. (See the Configuration
+  the `cli::Cli` struct (+ its `apply`), `apply_toml_str` (+ `KNOWN_KEYS`),
+  README, and `pulsemq.example.toml` — with tests. (See the Configuration
   checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
   `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` trailer.
-- Real `pulsemq.json` and `*.db` files are gitignored (may hold secrets/state);
-  the tracked template is `pulsemq.example.json`.
+- Real `pulsemq.toml` and `*.db` files are gitignored (may hold secrets/state);
+  the tracked template is `pulsemq.example.toml`.

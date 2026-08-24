@@ -108,10 +108,12 @@ impl std::fmt::Debug for BridgeConfig {
 }
 
 // -------------------------------------------------------------------------
-// Config parsing (JSON `bridges` array)
+// Config parsing (`bridges` array)
 // -------------------------------------------------------------------------
 
-/// Parse the optional `bridges` array from a JSON config document.
+/// Parse the optional `bridges` array from the config document. Called with
+/// the config file's contents pivoted to `serde_json::Value` — see
+/// `config::Config::apply_toml_str`.
 pub fn parse_bridges(doc: &Value, source: &str) -> Result<Vec<BridgeConfig>> {
     let node = &doc["bridges"];
     if node.is_null() {

@@ -9,8 +9,8 @@
 # Windows "mark of the web" alternate-data-stream artifacts
 *:Zone.Identifier
 
-# Local config (may hold secrets); the tracked template is pulsemq.example.json
-pulsemq.json
+# Local config (may hold secrets); the tracked template is pulsemq.example.toml
+pulsemq.toml
 
 # Machine-specific Claude notes (see CLAUDE.md for the shared ones)
 .claude.local.md

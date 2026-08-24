@@ -28,7 +28,7 @@ services:
       # MQTT_ACL_FILE: "/config/acl.json"
     volumes:
       - mqtt-data:/data # persistent SQLite state
-      # - ./config:/config:ro # certs, password file, ACL, JSON config
+      # - ./config:/config:ro # certs, password file, ACL, TOML config
 
 volumes:
   mqtt-data:
