@@ -5,6 +5,7 @@
 
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
 use std::sync::Arc;
 
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -193,7 +194,12 @@ pub fn maybe_acceptor(
 }
 
 fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let file = File::open(path).map_err(|e| cfg_err(format!("open cert {path}: {e}")))?;
+    // Prevent path traversal attacks by rejecting paths containing '..'.
+    let p = Path::new(path);
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(cfg_err(format!("Invalid input: {}", p.display())));
+    }
+    let file = File::open(p).map_err(|e| cfg_err(format!("open cert {path}: {e}")))?;
     let mut reader = BufReader::new(file);
     let certs: std::result::Result<Vec<_>, _> = rustls_pemfile::certs(&mut reader).collect();
     let certs = certs.map_err(|e| cfg_err(format!("parse cert {path}: {e}")))?;
@@ -220,7 +226,12 @@ pub fn peer_cn(peer_certificates: Option<&[CertificateDer<'_>]>) -> Option<Strin
 }
 
 fn load_key(path: &str) -> Result<PrivateKeyDer<'static>> {
-    let file = File::open(path).map_err(|e| cfg_err(format!("open key {path}: {e}")))?;
+    // Prevent path traversal attacks by rejecting paths containing '..'.
+    let p = Path::new(path);
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(cfg_err(format!("Invalid input: {}", p.display())));
+    }
+    let file = File::open(p).map_err(|e| cfg_err(format!("open key {path}: {e}")))?;
     let mut reader = BufReader::new(file);
     rustls_pemfile::private_key(&mut reader)
         .map_err(|e| cfg_err(format!("parse key {path}: {e}")))?

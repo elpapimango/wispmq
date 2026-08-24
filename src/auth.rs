@@ -45,7 +45,18 @@ pub struct Credentials {
 impl Credentials {
     /// Load and validate a password file.
     pub fn load(path: &str) -> Result<Credentials> {
-        let text = std::fs::read_to_string(path)
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        let path_obj = std::path::Path::new(path);
+        if path_obj
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(MqttError::Config(format!(
+                "Invalid input: {}",
+                path_obj.display()
+            )));
+        }
+        let text = std::fs::read_to_string(path_obj)
             .map_err(|e| MqttError::Config(format!("read password file {path}: {e}")))?;
         let mut users = HashMap::new();
         for (i, raw) in text.lines().enumerate() {
