@@ -1,8 +1,13 @@
+<p align="center">
+  <img src=".github/branding/banner.png" alt="PulseMQ — MQTT v5.0 / v3.1.1 / v3.1 broker in Rust" width="100%">
+</p>
+
 # PulseMQ
 
 [![CI](https://github.com/elpapimango/pulsemq/actions/workflows/ci.yml/badge.svg)](https://github.com/elpapimango/pulsemq/actions/workflows/ci.yml)
 [![Docker](https://github.com/elpapimango/pulsemq/actions/workflows/docker.yml/badge.svg)](https://github.com/elpapimango/pulsemq/actions/workflows/docker.yml)
 [![Container image](https://img.shields.io/badge/ghcr.io-pulsemq-2496ed?logo=docker&logoColor=white)](https://github.com/elpapimango/pulsemq/pkgs/container/pulsemq)
+[![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant&logoColor=white)](https://github.com/elpapimango/pulsemq-addon)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 An **MQTT broker** written in Rust, built directly from the
@@ -404,6 +409,10 @@ scrape_configs:
 ```
 
 ### Home Assistant MQTT Discovery
+
+Running Home Assistant OS or Supervised? [**pulsemq-addon**](https://github.com/elpapimango/pulsemq-addon)
+installs PulseMQ straight from the Add-on Store (`ha_discovery` on by
+default) — no manual Docker setup needed. Otherwise, wire it up by hand:
 
 Set `ha_discovery: true` (or `--ha-discovery` / `MQTT_HA_DISCOVERY=true`) and
 PulseMQ publishes retained [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
