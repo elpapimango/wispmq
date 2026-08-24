@@ -18,5 +18,8 @@
   "otlp_interval": 60,
   "otlp_metrics": true,
   "otlp_logs": true,
-  "service_name": "pulsemq"
+  "service_name": "pulsemq",
+
+  "ha_discovery": false,
+  "ha_discovery_prefix": "homeassistant"
 }

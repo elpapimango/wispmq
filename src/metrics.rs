@@ -2,11 +2,12 @@
 //! server. Gauges (current clients, sessions, retained messages, …) are
 //! computed on demand from broker state — see `Broker::snapshot`.
 //!
-//! Statistics are collected once into a [`Snapshot`] and rendered twice: as
-//! Prometheus text ([`Snapshot::to_prometheus`]) and as mosquitto-style
-//! `$SYS/broker/...` MQTT topics ([`Snapshot::to_sys_topics`]). Both surfaces
-//! read the same struct, so they cannot report different numbers for the same
-//! instant.
+//! Statistics are collected once into a [`Snapshot`] and rendered several
+//! ways: as Prometheus text ([`Snapshot::to_prometheus`]), as mosquitto-style
+//! `$SYS/broker/...` MQTT topics ([`Snapshot::to_sys_topics`]), and as Home
+//! Assistant MQTT Discovery config + state topics
+//! ([`Snapshot::to_ha_discovery`], [`Snapshot::to_ha_states`]). All read the
+//! same struct, so they cannot report different numbers for the same instant.
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -598,6 +599,75 @@ impl Snapshot {
         }
         t
     }
+
+    /// Home Assistant [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+    /// config for every statistic in [`Snapshot::series`], one retained
+    /// message per series under `{prefix}/sensor/{node_id}/{name}/config`.
+    /// Retained for the same reason `$SYS` is: a Home Assistant restart must
+    /// see every sensor immediately rather than waiting for the next
+    /// `sys_interval` tick.
+    ///
+    /// `node_id` scopes both the topic and `unique_id`, so multiple PulseMQ
+    /// instances publishing into the same broker with distinct
+    /// `service_name`s do not collide or overwrite each other's entities.
+    /// Each `state_topic` points at [`Snapshot::to_ha_states`]'s output for
+    /// the same series name, and both are built from the same `series()`
+    /// call, so they cannot disagree.
+    pub fn to_ha_discovery(&self, prefix: &str, node_id: &str) -> Vec<(String, String)> {
+        let device_name = if node_id == "pulsemq" {
+            "PulseMQ".to_string()
+        } else {
+            format!("PulseMQ ({node_id})")
+        };
+        self.series()
+            .into_iter()
+            .map(|s| {
+                let object_id = s.name.as_ref();
+                let topic = format!("{prefix}/sensor/{node_id}/{object_id}/config");
+                let payload = serde_json::json!({
+                    "name": friendly_series_name(object_id),
+                    "unique_id": format!("pulsemq_{node_id}_{object_id}"),
+                    "state_topic": ha_state_topic(node_id, object_id),
+                    "state_class": match s.kind {
+                        SeriesKind::Counter => "total_increasing",
+                        SeriesKind::Gauge => "measurement",
+                    },
+                    "device": {
+                        "identifiers": [format!("pulsemq_{node_id}")],
+                        "name": device_name,
+                        "manufacturer": "elpapimango",
+                        "model": "pulsemq",
+                        "sw_version": self.version,
+                    },
+                })
+                .to_string();
+                (topic, payload)
+            })
+            .collect()
+    }
+
+    /// Current values for every statistic in [`Snapshot::series`], published
+    /// under the same state topics [`Snapshot::to_ha_discovery`] points at.
+    pub fn to_ha_states(&self, node_id: &str) -> Vec<(String, String)> {
+        self.series()
+            .into_iter()
+            .map(|s| (ha_state_topic(node_id, &s.name), s.value.to_string()))
+            .collect()
+    }
+}
+
+/// The MQTT state topic one series' Home Assistant sensor reads from.
+fn ha_state_topic(node_id: &str, object_id: &str) -> String {
+    format!("pulsemq/{node_id}/{object_id}")
+}
+
+/// A human-readable Home Assistant entity name from a Prometheus series name,
+/// e.g. `mqtt_clients_connected` -> `clients connected`.
+fn friendly_series_name(object_id: &str) -> String {
+    object_id
+        .strip_prefix("mqtt_")
+        .unwrap_or(object_id)
+        .replace('_', " ")
 }
 
 #[cfg(test)]
@@ -721,5 +791,67 @@ mod tests {
             find("mqtt_clients_connected").otel_name(),
             "mqtt_clients_connected"
         );
+    }
+
+    #[test]
+    fn ha_discovery_state_topics_match_ha_states_topics() {
+        // The two lists must agree by construction (both come from `series()`),
+        // so an HA discovery config's `state_topic` always resolves to a topic
+        // `to_ha_states` actually publishes.
+        let snap = distinct();
+        let discovery = snap.to_ha_discovery("homeassistant", "pulsemq");
+        let states = snap.to_ha_states("pulsemq");
+        assert_eq!(discovery.len(), states.len());
+        assert_eq!(discovery.len(), snap.series().len());
+
+        let state_topics: std::collections::HashSet<&str> =
+            states.iter().map(|(t, _)| t.as_str()).collect();
+        for (config_topic, payload) in &discovery {
+            assert!(
+                config_topic.starts_with("homeassistant/sensor/pulsemq/"),
+                "{config_topic}"
+            );
+            assert!(config_topic.ends_with("/config"), "{config_topic}");
+            let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+            let state_topic = v["state_topic"].as_str().unwrap();
+            assert!(
+                state_topics.contains(state_topic),
+                "discovery config points at a topic to_ha_states never publishes: {state_topic}"
+            );
+            assert!(v["unique_id"].as_str().unwrap().starts_with("pulsemq_"));
+            assert_eq!(v["device"]["identifiers"][0], "pulsemq_pulsemq");
+        }
+    }
+
+    #[test]
+    fn ha_discovery_state_class_matches_series_kind() {
+        let snap = distinct();
+        let series = snap.series();
+        let discovery = snap.to_ha_discovery("homeassistant", "pulsemq");
+        for (s, (_, payload)) in series.iter().zip(discovery.iter()) {
+            let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+            let expected = match s.kind {
+                SeriesKind::Counter => "total_increasing",
+                SeriesKind::Gauge => "measurement",
+            };
+            assert_eq!(v["state_class"], expected, "{}", s.name);
+        }
+    }
+
+    #[test]
+    fn ha_discovery_node_id_scopes_device_and_avoids_default_name_suffix() {
+        // The default service_name ("pulsemq") gets a plain device name;
+        // anything else gets it appended so multiple instances are
+        // distinguishable on the same Home Assistant dashboard.
+        let snap = distinct();
+        let default_node = snap.to_ha_discovery("homeassistant", "pulsemq");
+        let v: serde_json::Value = serde_json::from_str(&default_node[0].1).unwrap();
+        assert_eq!(v["device"]["name"], "PulseMQ");
+
+        let scoped = snap.to_ha_discovery("homeassistant", "edge-1");
+        let v: serde_json::Value = serde_json::from_str(&scoped[0].1).unwrap();
+        assert_eq!(v["device"]["name"], "PulseMQ (edge-1)");
+        assert_eq!(v["device"]["identifiers"][0], "pulsemq_edge-1");
+        assert!(scoped[0].0.starts_with("homeassistant/sensor/edge-1/"));
     }
 }

@@ -261,6 +261,68 @@ async fn sys_topics_do_not_inflate_the_retained_gauge() {
 }
 
 #[tokio::test]
+async fn ha_discovery_topics_do_not_inflate_the_retained_gauge() {
+    // Same property as $SYS: enabling ha_discovery publishes ~2x
+    // series().len() retained messages (discovery config + state, per
+    // statistic) of the broker's own making, and none of them may count as
+    // user retained data.
+    let addr = free_addr();
+    let config = Config {
+        listen_addr: addr,
+        sys_interval: 1,
+        ha_discovery: true,
+        service_name: "edge-1".to_string(),
+        ..Config::default()
+    };
+    let broker = Broker::new(
+        config,
+        Storage::null(),
+        Default::default(),
+        Acl::permit_all(),
+        None,
+    );
+    let b = broker.clone();
+    tokio::spawn(async move {
+        let _ = pulsemq::server::run(b).await;
+    });
+    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    sleep(Duration::from_millis(400)).await;
+
+    let snap = broker.snapshot();
+    assert!(
+        !snap.to_ha_discovery("homeassistant", "edge-1").is_empty(),
+        "expected HA discovery topics to exist for this test to mean anything"
+    );
+    assert_eq!(
+        snap.retained_messages, 0,
+        "HA discovery/state topics must not count as user retained messages"
+    );
+    assert_eq!(snap.retained_bytes, 0);
+    assert!(
+        broker.retained().is_empty(),
+        "HA discovery/state topics must not appear in the retained listing"
+    );
+
+    // A real retained publish under an unrelated topic still shows up.
+    let mut c = connect(addr, "retainer").await;
+    let p = Packet::Publish(Publish {
+        dup: false,
+        qos: QoS::AtMostOnce,
+        retain: true,
+        topic: "user/keep".into(),
+        packet_id: None,
+        properties: Properties::new(),
+        payload: b"hello"[..].into(),
+    });
+    write_packet(&mut c, &p, V5).await.unwrap();
+    sleep(Duration::from_millis(250)).await;
+
+    let snap = broker.snapshot();
+    assert_eq!(snap.retained_messages, 1);
+    assert_eq!(broker.retained().len(), 1);
+}
+
+#[tokio::test]
 async fn expired_retained_messages_are_excluded_and_purged() {
     // A retained message with a short `message_expiry_interval` must stop
     // counting toward the gauges once it expires, and the entry must not

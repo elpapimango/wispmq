@@ -16,14 +16,22 @@
 //!   ordinary wildcard subscribers are unaffected.
 //! - Clients are refused permission to publish under `$SYS` (see
 //!   `broker::handle_publish`), so these values cannot be forged.
+//!
+//! When `ha_discovery` is set, this loop also publishes Home Assistant MQTT
+//! Discovery config (once, at startup) and state topics (every tick) built
+//! from the same [`crate::metrics::Snapshot`] — see
+//! [`crate::metrics::Snapshot::to_ha_discovery`] and `to_ha_states`. It rides
+//! this timer rather than a separate task because it needs the same data on
+//! the same cadence; `sys_interval: 0` disables both.
 
 use std::time::Duration;
 
 use crate::broker::Broker;
 
-/// Run the periodic `$SYS` publisher until the process exits.
+/// Run the periodic `$SYS` (and, if enabled, Home Assistant discovery)
+/// publisher until the process exits.
 ///
-/// Returns immediately when `sys_interval` is 0, which disables the feature.
+/// Returns immediately when `sys_interval` is 0, which disables both.
 pub async fn run(broker: Broker) {
     let interval = broker.config().sys_interval;
     if interval == 0 {
@@ -36,21 +44,47 @@ pub async fn run(broker: Broker) {
         "publishing $SYS/broker status topics every {interval}s (subscribe to '$SYS/#')"
     );
 
+    let ha_discovery = broker.config().ha_discovery;
+    if ha_discovery {
+        publish_ha_discovery(&broker);
+    }
+
     // Publish once immediately so the topics exist without waiting a full
     // interval, then settle into the timer.
-    publish_once(&broker);
+    publish_once(&broker, ha_discovery);
 
     let mut ticker = tokio::time::interval(period);
     // The immediate publish above already covered this tick.
     ticker.tick().await;
     loop {
         ticker.tick().await;
-        publish_once(&broker);
+        publish_once(&broker, ha_discovery);
     }
 }
 
-fn publish_once(broker: &Broker) {
+fn publish_once(broker: &Broker, ha_discovery: bool) {
     let snapshot = broker.snapshot();
-    let entries = snapshot.to_sys_topics();
+    let mut entries = snapshot.to_sys_topics();
+    if ha_discovery {
+        entries.extend(snapshot.to_ha_states(&broker.config().service_name));
+    }
+    broker.publish_sys(&entries);
+}
+
+/// Publish Home Assistant discovery config once. Not part of the periodic
+/// tick: the config is static (it only changes across a version upgrade,
+/// already covered by `sw_version`), so republishing it every `sys_interval`
+/// would just be wasted retained-message churn.
+fn publish_ha_discovery(broker: &Broker) {
+    let cfg = broker.config();
+    let entries = broker
+        .snapshot()
+        .to_ha_discovery(&cfg.ha_discovery_prefix, &cfg.service_name);
+    tracing::info!(
+        "published {} Home Assistant discovery configs under '{}/sensor/{}/...'",
+        entries.len(),
+        cfg.ha_discovery_prefix,
+        cfg.service_name
+    );
     broker.publish_sys(&entries);
 }

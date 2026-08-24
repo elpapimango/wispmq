@@ -52,17 +52,20 @@ impl Broker {
         // reach late subscribers), but they are broker-owned bookkeeping, not
         // user data. Counting them would make `retained_messages` jump by ~50
         // the moment $SYS is enabled and would silently change the meaning of
-        // an existing gauge, so they are excluded here.
+        // an existing gauge, so they are excluded here — likewise this
+        // broker's own Home Assistant discovery/state topics (`sysinfo`),
+        // same reasoning, see `is_broker_bookkeeping`.
         // Also the moment to drop entries whose `message_expiry_interval`
         // has passed: nothing else in the broker purges them (they normally
         // just get overwritten by the next retained PUBLISH on that topic),
         // so an expired entry that's never republished would otherwise leak
         // in memory forever, in addition to inflating these gauges.
         st.retained.retain(|_, msg| !msg.is_expired());
+        let cfg = self.config();
         let mut retained_messages = 0u64;
         let mut retained_bytes = 0u64;
         for (topic, msg) in st.retained.iter() {
-            if topic.starts_with(SYS_PREFIX) {
+            if is_broker_bookkeeping(topic, cfg) {
                 continue;
             }
             retained_messages += 1;
@@ -130,12 +133,15 @@ impl Broker {
     /// List all retained messages (topic, size, QoS).
     pub fn retained(&self) -> Vec<RetainedInfo> {
         let st = self.lock();
+        let cfg = self.config();
         let mut out: Vec<RetainedInfo> = st
             .retained
             .iter()
-            // Skip `$SYS` for the same reason the gauges do: it is broker
-            // status, and ~50 of them would bury the user's own retained data.
-            .filter(|(topic, m)| !m.is_expired() && !topic.starts_with(SYS_PREFIX))
+            // Skip `$SYS` and Home Assistant discovery/state topics for the
+            // same reason the gauges do: they are broker status, and burying
+            // the user's own retained data under ~50-plus of them helps no
+            // one asking "what have I actually retained here?"
+            .filter(|(topic, m)| !m.is_expired() && !is_broker_bookkeeping(topic, cfg))
             .map(|(topic, m)| RetainedInfo {
                 topic: topic.clone(),
                 payload_size: m.payload.len(),
@@ -145,4 +151,25 @@ impl Broker {
         out.sort_by(|a, b| a.topic.cmp(&b.topic));
         out
     }
+}
+
+/// Whether `topic` is broker-owned bookkeeping rather than user data: `$SYS`,
+/// or this broker's own Home Assistant discovery/state topics (`sysinfo`).
+/// Both are published retained by the broker itself on a timer, so counting
+/// them in `retained_messages`/`retained_bytes`/`list_retained` would make
+/// those gauges jump the moment a status feature is turned on rather than
+/// when the user's own data changes.
+///
+/// Scoped to *this instance's* `service_name`/`ha_discovery_prefix`, not a
+/// blanket `homeassistant/#`/`pulsemq/#` match: those are ordinary,
+/// widely-shared topic spaces (other devices publish their own discovery
+/// configs there too), so only the exact prefixes this broker publishes to
+/// are excluded.
+fn is_broker_bookkeeping(topic: &str, cfg: &Config) -> bool {
+    topic.starts_with(SYS_PREFIX)
+        || topic.starts_with(&format!("pulsemq/{}/", cfg.service_name))
+        || topic.starts_with(&format!(
+            "{}/sensor/{}/",
+            cfg.ha_discovery_prefix, cfg.service_name
+        ))
 }

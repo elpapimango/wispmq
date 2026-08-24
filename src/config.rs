@@ -53,6 +53,8 @@ const KNOWN_KEYS: &[&str] = &[
     "otlp_metrics",
     "otlp_logs",
     "service_name",
+    "ha_discovery",
+    "ha_discovery_prefix",
 ];
 
 /// Default config-file names looked for in the working directory.
@@ -273,6 +275,18 @@ pub struct Config {
     pub otlp_logs: bool,
     /// `service.name` on the exported OTLP resource.
     pub service_name: String,
+    /// Publish Home Assistant [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+    /// config + state topics for every broker statistic, so Home Assistant's
+    /// own MQTT integration auto-creates sensor entities with no custom
+    /// component or add-on needed. Off by default (an unconfigured deployment
+    /// must not start publishing extra retained topics). Rides `sys_interval`
+    /// for its state-refresh cadence, so `sys_interval: 0` disables this too.
+    /// See `sysinfo`.
+    pub ha_discovery: bool,
+    /// Home Assistant's discovery topic prefix (`MQTT_DISCOVERY_PREFIX` /
+    /// `discovery_prefix` on the Home Assistant side). Ignored unless
+    /// `ha_discovery` is set.
+    pub ha_discovery_prefix: String,
     /// Path of the JSON config file that was loaded, if any (informational).
     pub config_file: Option<String>,
 }
@@ -316,6 +330,8 @@ impl Default for Config {
             otlp_metrics: true,
             otlp_logs: true,
             service_name: "pulsemq".to_string(),
+            ha_discovery: false,
+            ha_discovery_prefix: "homeassistant".to_string(),
             config_file: None,
         }
     }
@@ -473,6 +489,15 @@ impl Config {
         }
         if let Some(v) = non_empty_env("MQTT_SERVICE_NAME") {
             self.service_name = v;
+        }
+        if let Some(b) = non_empty_env("MQTT_HA_DISCOVERY")
+            .as_deref()
+            .and_then(parse_bool_value)
+        {
+            self.ha_discovery = b;
+        }
+        if let Some(v) = non_empty_env("MQTT_HA_DISCOVERY_PREFIX") {
+            self.ha_discovery_prefix = v;
         }
     }
 }
@@ -675,6 +700,12 @@ impl Config {
         }
         if let Some(v) = j_str(doc, "service_name", source)? {
             self.service_name = v;
+        }
+        if let Some(b) = j_bool(doc, "ha_discovery", source)? {
+            self.ha_discovery = b;
+        }
+        if let Some(v) = j_str(doc, "ha_discovery_prefix", source)? {
+            self.ha_discovery_prefix = v;
         }
         if let Some(n) = j_u32(doc, "otlp_interval", source)? {
             self.otlp_interval = n;
@@ -1041,6 +1072,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("Authorization", "Basic dXNlcg==")]
         );
+    }
+
+    #[test]
+    fn ha_discovery_defaults_to_disabled() {
+        // Must be opt-in: an existing deployment that upgrades and changes
+        // nothing must not start publishing new retained topics.
+        let cfg = Config::default();
+        assert!(!cfg.ha_discovery);
+        assert_eq!(cfg.ha_discovery_prefix, "homeassistant");
+    }
+
+    #[test]
+    fn json_ha_discovery_options() {
+        let mut cfg = Config::default();
+        cfg.apply_json_str(
+            r#"{"ha_discovery": true, "ha_discovery_prefix": "hass"}"#,
+            "t.json",
+        )
+        .unwrap();
+        assert!(cfg.ha_discovery);
+        assert_eq!(cfg.ha_discovery_prefix, "hass");
+
+        let mut bad = Config::default();
+        assert!(bad
+            .apply_json_str(r#"{"ha_discovery": "yes"}"#, "t.json")
+            .is_err());
     }
 
     #[test]

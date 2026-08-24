@@ -276,6 +276,27 @@ pub(crate) struct Cli {
         help_heading = "Telemetry export (OTLP, requires --features otel)"
     )]
     pub service_name: Option<String>,
+
+    /// Publish Home Assistant MQTT Discovery config + state topics for every
+    /// broker statistic [MQTT_HA_DISCOVERY] (default false)
+    #[arg(
+        long,
+        value_name = "BOOL",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = bool_flag,
+        help_heading = "Home Assistant MQTT Discovery"
+    )]
+    pub ha_discovery: Option<bool>,
+
+    /// Home Assistant's discovery topic prefix [MQTT_HA_DISCOVERY_PREFIX]
+    /// (default homeassistant)
+    #[arg(
+        long,
+        value_name = "PREFIX",
+        help_heading = "Home Assistant MQTT Discovery"
+    )]
+    pub ha_discovery_prefix: Option<String>,
 }
 
 impl Cli {
@@ -368,6 +389,12 @@ impl Cli {
         }
         if let Some(v) = &self.service_name {
             cfg.service_name = v.clone();
+        }
+        if let Some(v) = self.ha_discovery {
+            cfg.ha_discovery = v;
+        }
+        if let Some(v) = &self.ha_discovery_prefix {
+            cfg.ha_discovery_prefix = v.clone();
         }
     }
 }
@@ -603,6 +630,18 @@ mod tests {
             cfg.otlp_headers.iter().collect::<Vec<_>>(),
             vec![("DD-API-KEY", "abc"), ("X-Extra", "1")]
         );
+    }
+
+    #[test]
+    fn ha_discovery_flags_apply() {
+        let cfg = config_from(&["--ha-discovery", "--ha-discovery-prefix", "hass"]);
+        assert!(cfg.ha_discovery);
+        assert_eq!(cfg.ha_discovery_prefix, "hass");
+
+        // Untouched flags keep the layer below's default.
+        let cfg = config_from(&[]);
+        assert!(!cfg.ha_discovery);
+        assert_eq!(cfg.ha_discovery_prefix, "homeassistant");
     }
 
     #[test]
