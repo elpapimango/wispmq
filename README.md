@@ -10,6 +10,15 @@
 [![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant&logoColor=white)](https://github.com/elpapimango/pulsemq-addon)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
+> [!WARNING]
+> **Use this at your own risk.** This is a personal/learning project with
+> **no support commitment, no SLA, and no warranty of any kind** — see
+> [License](#license). It has not been audited, is not certified for any
+> compliance regime, and there is no guarantee of timely security fixes. Do
+> not point it at anything where a broker outage or a data-handling mistake
+> would actually hurt you (safety-critical systems, regulated data, business
+> uptime you depend on). If it breaks, you keep both pieces.
+
 An **MQTT broker** written in Rust, built directly from the
 [OASIS MQTT Version 5.0 specification](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)
 (07 March 2019). It also speaks **MQTT v3.1.1** and **v3.1**, negotiated
