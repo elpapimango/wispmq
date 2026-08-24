@@ -54,6 +54,20 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Route panics through `tracing` (same sink as everything else — stdout in
+    // Docker) instead of relying solely on the default hook's raw stderr
+    // write, which is easy to miss in a rotated/truncated container log.
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "unknown location".into());
+        tracing::error!(
+            "panic at {location}: {info}\n{}",
+            std::backtrace::Backtrace::capture()
+        );
+    }));
+
     if let Some(path) = &config.config_file {
         tracing::info!("loaded config file {path}");
     }
@@ -178,14 +192,50 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Serve MQTT until Ctrl-C.
-    let outcome = tokio::select! {
-        res = server::run(broker) => res,
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("shutdown signal received, exiting");
-            Ok(())
+    // Serve MQTT until Ctrl-C or, on Unix, SIGTERM — the signal `docker stop`
+    // and most orchestrators send. Without an explicit handler SIGTERM's
+    // default disposition kills the process before any log line is written,
+    // which is why a stopped container can otherwise show no reason at all.
+    #[cfg(unix)]
+    let outcome = {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            res = server::run(broker) => {
+                if let Err(e) = &res {
+                    tracing::error!("MQTT listener stopped with error: {e}");
+                }
+                res
+            },
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("SIGINT (Ctrl-C) received, shutting down");
+                Ok(())
+            },
+            _ = sigterm.recv() => {
+                tracing::info!("SIGTERM received, shutting down");
+                Ok(())
+            },
         }
     };
+    #[cfg(not(unix))]
+    let outcome = tokio::select! {
+        res = server::run(broker) => {
+            if let Err(e) = &res {
+                tracing::error!("MQTT listener stopped with error: {e}");
+            }
+            res
+        },
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("SIGINT (Ctrl-C) received, shutting down");
+            Ok(())
+        },
+    };
+    if let Err(e) = &outcome {
+        tracing::error!("broker exiting with error: {e}");
+    } else {
+        tracing::info!("broker shutdown complete");
+    }
     // Flush the last telemetry batch — the one covering the shutdown itself.
     telemetry.shutdown();
     outcome
