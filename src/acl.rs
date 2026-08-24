@@ -64,7 +64,12 @@ impl Acl {
 
     /// Load and validate an ACL policy from a JSON file.
     pub fn load(path: &str) -> Result<Acl> {
-        let text = std::fs::read_to_string(path)
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        let p = std::path::Path::new(path);
+        if p.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err(MqttError::Config(format!("Invalid input: {}", p.display())));
+        }
+        let text = std::fs::read_to_string(p)
             .map_err(|e| MqttError::Config(format!("read ACL file {path}: {e}")))?;
         let value: Value = serde_json::from_str(&text)
             .map_err(|e| MqttError::Config(format!("parse ACL file {path}: {e}")))?;
