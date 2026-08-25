@@ -249,6 +249,44 @@ impl Broker {
     // ---------------------------------------------------------------------
 
     pub fn handle_packet(&self, client_id: &str, epoch: u64, packet: Packet) -> Action {
+        // Epoch fence: reject packets from superseded connections (client-ID
+        // takeover). The connection task captures its epoch at CONNACK and
+        // passes it here; if the session's current epoch is newer, this
+        // connection was replaced and its packets must not mutate the
+        // replacement session. Takeover sends a best-effort shutdown
+        // notification, but that does not constitute an authorization check:
+        // an already-read packet, a packet processed during the takeover race,
+        // or traffic after a dropped notification can still reach dispatch.
+        // This centralized check is the canonical inbound fence; reliable
+        // takeover shutdown remains defense in depth.
+        {
+            let st = self.lock();
+            if let Some(session) = st.sessions.get(client_id) {
+                if session.epoch != epoch {
+                    // Superseded by a newer connection — silently discard.
+                    tracing::trace!(
+                        client_id,
+                        conn_epoch = epoch,
+                        session_epoch = session.epoch,
+                        packet = %packet.name(),
+                        "discarding packet from superseded connection"
+                    );
+                    return Action::Continue;
+                }
+            } else {
+                // Session was removed (expired or clean-start takeover) — the
+                // connection should have been notified, but if it wasn't or if
+                // a packet was already in flight, discard it.
+                tracing::trace!(
+                    client_id,
+                    epoch,
+                    packet = %packet.name(),
+                    "discarding packet for non-existent session"
+                );
+                return Action::Continue;
+            }
+        }
+
         match packet {
             Packet::Publish(p) => self.handle_publish(client_id, epoch, p),
             Packet::Puback(a) => self.handle_puback(client_id, epoch, a),
