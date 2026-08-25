@@ -19,7 +19,7 @@ impl Broker {
         // Epoch validation: reject disconnects from superseded connections.
         // Without this check, a stale connection could update the session expiry
         // or trigger Will publication for the replacement session after takeover.
-        let mut st = self.lock();
+        let st = self.lock();
         if let Some(session) = st.sessions.get(client_id) {
             if session.epoch != epoch {
                 tracing::debug!(
