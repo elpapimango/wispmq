@@ -131,15 +131,16 @@ where
     Ok(())
 }
 
-/// Constant-time equality to avoid leaking the token via timing. Runs over
-/// `max(a.len(), b.len())` unconditionally so a length mismatch doesn't
-/// short-circuit and leak the true token's length.
+/// Constant-time equality to avoid leaking the token via timing. Always runs
+/// for exactly `b.len()` iterations (the secret length) regardless of the
+/// candidate's length, so timing measurements cannot infer the secret length.
 fn tokens_match(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     let mut diff = (a.len() != b.len()) as u8;
-    for i in 0..a.len().max(b.len()) {
+    // Loop bound is the secret length only; candidate length does not affect
+    // iteration count, closing the timing side-channel that leaked token length.
+    for (i, &y) in b.iter().enumerate() {
         let x = a.get(i).copied().unwrap_or(0);
-        let y = b.get(i).copied().unwrap_or(0);
         diff |= x ^ y;
     }
     diff == 0
