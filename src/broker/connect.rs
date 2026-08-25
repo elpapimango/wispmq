@@ -76,6 +76,17 @@ impl Broker {
             (connect.client_id.clone(), false)
         };
 
+        // Reserved namespace: reject client IDs that collide with internal
+        // identities. `$bridge/<name>` is assigned by `register_bridge` to
+        // privileged in-process bridge sessions; `$SYS/` is the system-topic
+        // prefix. Allowing a network client to claim either would let it
+        // inherit bridge subscriptions (bypassing ACL) or interfere with
+        // broker telemetry.
+        if client_id.starts_with("$bridge/") || client_id.starts_with("$SYS/") {
+            tracing::debug!("rejecting CONNECT with reserved client_id {:?}", client_id);
+            return Err(Connack::new(false, ReasonCode::ClientIdentifierNotValid));
+        }
+
         // Session Expiry Interval, clamped to the server maximum. v3.x has no
         // expiry property: a non-clean session persists (up to the server cap),
         // a clean session does not persist.
