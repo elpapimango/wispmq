@@ -21,33 +21,40 @@ project.
 **Versioning note**: this project briefly shipped as 1.0.0 → 1.1.1 → 1.2.0
 before that was judged premature and renumbered to start at 0.9.0. All three
 old tags, their GitHub Releases, and the GHCR package were deleted (commit
-history was rewritten to match: `git log` messages say 0.9.x, not 1.x). Only
-**v0.9.2** is an actual tagged/released artifact — 0.9.0 and 0.9.1 are
+history was rewritten to match: `git log` messages say 0.9.x, not 1.x).
+**v0.9.2** and **v0.9.3** are tagged/released artifacts — 0.9.0 and 0.9.1 are
 historical waypoints named in commit messages and the milestone list below,
 not separate tags, Releases, or images.
 
-Current status: the crate version is **0.9.2**, tagged `v0.9.2` and released
-(marked latest), adding OTLP telemetry export (item 6) on top of the 0.9.1
+**v0.9.2** added OTLP telemetry export (item 6) on top of the 0.9.1
 waypoint's work — forwarding, the 5A/5B audit, JSON config, `$SYS` metrics,
 the clap CLI and the 5C refactor (see "Done since 0.9.0" below). A **minor**
 bump: it is additive — the feature is off by default, the default build
 carries none of its dependencies, and the Prometheus output is byte-identical
 to the pre-OTLP build despite the `Snapshot::series()` refactor underneath it.
-
 Its release notes describe the delta from **0.9.0**, leading with the four
 breaking changes carried over from the 0.9.1 waypoint (JSON config move, the
 `mqtt_packet_*` rename, bridge traffic in the counters, and the `Startup`/
-`HELP` library-API change), then the 0.9.2 OTLP addition. CI (`ci.yml`) and
-image builds (`docker.yml`) are green on `main`. `git log` has the detail —
-this is the map.
+`HELP` library-API change), then the 0.9.2 OTLP addition.
 
-`Cargo.toml` on `main` has since moved to a **0.9.3 waypoint** (same status as
-0.9.0/0.9.1 before them: real, in commit history, not yet a tag/Release/image)
-for **another breaking change** — the config file format switched from JSON
-to TOML (`config::Config::apply_toml_str`, replacing `apply_json_str`;
+**v0.9.3**, tagged and released (marked latest), is **another breaking
+change** — the config file format switched from JSON to TOML
+(`config::Config::apply_toml_str`, replacing `apply_json_str`;
 `pulsemq.toml` replaces `pulsemq.json`; `pulsemq.example.toml` replaces
 `pulsemq.example.json`). The ACL policy file (`--acl-file`) is unaffected —
-still JSON, a separate document serving a different purpose. See "Done since
+still JSON, a separate document serving a different purpose.
+
+Current status: `Cargo.toml` on `main` has since moved to a **0.9.4 waypoint**
+(same status 0.9.0/0.9.1/0.9.3-before-its-tag had: real, in commit history,
+not yet a tag/Release/image) for an Aikido security-fix pass — eight fixes
+closing session-takeover paths (epoch validation at the packet-dispatch
+boundary, sessions bound to authenticated identity with resubscription
+re-authorized on resume, reserved `$bridge/`/`$SYS/` client-id prefixes
+rejected), a bearer-token comparison timing leak, and path-traversal
+rejection (a `..` path component is refused) on `--acl-file`,
+`--password-file`, `--cert-file`, and `--key-file`. No breaking change, so
+this is a **patch** bump. CI (`ci.yml`) and image builds (`docker.yml`) are
+green on `main`. `git log` has the detail — this is the map. See "Done since
 0.9.0" below for what else has landed since 0.9.2.
 
 Milestones, in order:
@@ -168,6 +175,16 @@ Done since 0.9.0:
   rejection *and* supports `#` comments. `bridges` reads more naturally too,
   as `[[bridges]]`/`[[bridges.topics]]` array-of-tables instead of a JSON
   array of objects.
+- **Post-0.9.3 Aikido security-fix pass** (0.9.4 waypoint, item 10, no
+  breaking change) — session takeover closed from three angles: sessions are
+  now bound to the authenticated identity that created them (re-authorizing
+  every subscription on resume), state-changing packet handlers validate the
+  session's epoch so a superseded connection's inbound packets can't act on a
+  session it no longer owns, and CONNECT/storage-restore reject reserved
+  `$bridge/`/`$SYS/` client-id prefixes. `admin::tokens_match` no longer
+  short-circuits its iteration count, closing a bearer-token-length timing
+  leak. `acl::Acl::load`, `auth::Credentials::load`, and `tls`'s cert/key
+  loaders now reject any path containing a `..` component.
 
 **Nothing is left on the roadmap** — every numbered item in `TODO.md` is done.
 Item 6 shipped as the **v0.9.2** release.

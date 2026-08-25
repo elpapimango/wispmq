@@ -384,7 +384,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
 ```
 
 ```
-$SYS/broker/version PulseMQ 0.9.3
+$SYS/broker/version PulseMQ 0.9.4
 $SYS/broker/uptime 15 seconds
 $SYS/broker/clients/connected 1
 $SYS/broker/clients/total 1

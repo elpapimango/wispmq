@@ -25,6 +25,7 @@ When you finish an item, tick its boxes, move it to a "Done" note, and commit.
 | 7 | Post-0.9.2 audit — fix pass (QoS2/retained/timing/panic bugs, dep trim, test dedup) | ✅ done |
 | 8 | Post-0.9.2 audit — backlog (unbounded outbound channel, admin timeout, WS frame cap, ...) | ✅ done |
 | 9 | New topic ideas (not yet scoped) | 💡 ideas |
+| 10 | Post-0.9.3 Aikido security-fix pass (session takeover, path traversal, timing leak) | ✅ done |
 
 **Nothing is left on the roadmap.** All of item 8's backlog is resolved —
 either fixed in code, resolved as intentional/accepted with a documentation
@@ -44,18 +45,25 @@ rejection is only observable by then actually using the connection (a read,
 or the next protocol handshake), which is why both "no cert" tests assert on
 that instead of on `connect()`'s result.
 
-`main` is at crate version **0.9.2** (item 6), tagged `v0.9.2` and released
-(marked latest — see the release note at the bottom of this file). This
-project was originally released as 1.0.0 → 1.1.1 → 1.2.0, then renumbered to
-start at 0.9.0 before those tags/Releases/images existed for long; 0.9.0 and
-0.9.1 are historical waypoints referenced in commit messages and release
-notes, not separate tags or Releases — **v0.9.2 is the only one that actually
-exists.**
+`main` is at crate version **0.9.4**. This project was originally released as
+1.0.0 → 1.1.1 → 1.2.0, then renumbered to start at 0.9.0 before those
+tags/Releases/images existed for long; 0.9.0 and 0.9.1 are historical
+waypoints referenced in commit messages and release notes, not separate tags
+or Releases. **v0.9.2** (item 6, OTLP) and **v0.9.3** (config file format
+JSON → TOML, breaking) are both tagged and released — v0.9.3 is currently
+`latest`.
 
-`Cargo.toml` has since moved to a **0.9.3 waypoint** on `main` (same
-not-yet-tagged status 0.9.0/0.9.1 had): the config file format switched from
-JSON to TOML, a breaking change. See `CLAUDE.md`'s "Done since 0.9.0" list for
-detail.
+`Cargo.toml` has since moved to a **0.9.4 waypoint** on `main` (same
+not-yet-tagged status 0.9.0/0.9.1/0.9.3-before-its-tag had): item 10, a
+post-0.9.3 Aikido security-fix pass — eight fixes closing session-takeover
+paths (epoch validation at the packet-dispatch boundary, sessions bound to
+authenticated identity with resubscription re-authorized on resume, reserved
+`$bridge/`/`$SYS/` client-id prefixes rejected in CONNECT and storage
+restore), a bearer-token comparison timing leak (`admin::tokens_match` now
+iterates a fixed count keyed to the secret's length), and path-traversal
+rejection (paths containing a `..` component are refused) on `--acl-file`,
+`--password-file`, `--cert-file`, and `--key-file`. No breaking change —
+patch bump, not minor.
 
 ---
 
