@@ -13,9 +13,27 @@ impl Broker {
     pub(super) fn handle_client_disconnect(
         &self,
         client_id: &str,
-        _epoch: u64,
+        epoch: u64,
         d: Disconnect,
     ) -> Action {
+        // Epoch validation: reject disconnects from superseded connections.
+        // Without this check, a stale connection could update the session expiry
+        // or trigger Will publication for the replacement session after takeover.
+        let st = self.lock();
+        if let Some(session) = st.sessions.get(client_id) {
+            if session.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} DISCONNECT rejected: stale epoch {epoch} != current {}",
+                    session.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
+        } else {
+            // Session no longer exists; the connection should have been closed.
+            return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+        }
+        drop(st);
+
         // A DISCONNECT with reason 0x04 requests Will publication; a normal
         // (0x00) DISCONNECT means the Will is discarded (3.1.2.5 / 3.14.4).
         let publish_will = d.reason_code == ReasonCode::DisconnectWithWillMessage;

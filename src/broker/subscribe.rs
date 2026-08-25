@@ -11,7 +11,7 @@ use super::routing::{deliver_to_session, send_to};
 use super::*;
 
 impl Broker {
-    pub(super) fn handle_subscribe(&self, client_id: &str, _epoch: u64, sub: Subscribe) -> Action {
+    pub(super) fn handle_subscribe(&self, client_id: &str, epoch: u64, sub: Subscribe) -> Action {
         let sub_id = sub.properties.subscription_identifiers.first().copied();
         let mut reason_codes = Vec::with_capacity(sub.filters.len());
         // Retained messages to send after the SUBACK, collected under the lock.
@@ -19,6 +19,22 @@ impl Broker {
 
         let mut st = self.lock();
         let max_qos = self.inner.config.maximum_qos;
+
+        // Epoch validation: reject subscriptions from superseded connections.
+        // Without this check, a stale connection could subscribe using the
+        // replacement session's identity and authorization context after takeover.
+        if let Some(session) = st.sessions.get(client_id) {
+            if session.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} SUBSCRIBE rejected: stale epoch {epoch} != current {}",
+                    session.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
+        } else {
+            // Session no longer exists; the connection should have been closed.
+            return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+        }
 
         // Authenticated identity for ACL decisions (constant for the session).
         let acl = self.acl();
@@ -137,11 +153,26 @@ impl Broker {
     pub(super) fn handle_unsubscribe(
         &self,
         client_id: &str,
-        _epoch: u64,
+        epoch: u64,
         unsub: Unsubscribe,
     ) -> Action {
         let mut reason_codes = Vec::with_capacity(unsub.filters.len());
         let mut st = self.lock();
+
+        // Epoch validation: reject unsubscriptions from superseded connections.
+        if let Some(session) = st.sessions.get(client_id) {
+            if session.epoch != epoch {
+                tracing::debug!(
+                    "{client_id:?} UNSUBSCRIBE rejected: stale epoch {epoch} != current {}",
+                    session.epoch
+                );
+                return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+            }
+        } else {
+            // Session no longer exists; the connection should have been closed.
+            return Action::ServerDisconnect(ReasonCode::UnspecifiedError);
+        }
+
         for filter in &unsub.filters {
             let (share_name, match_filter) = match topic::parse_filter(filter) {
                 Some(p) => (p.share_name.map(|s| s.to_string()), p.filter.to_string()),

@@ -115,12 +115,16 @@ impl Broker {
         st.next_epoch += 1;
 
         // Takeover: an existing online session with the same id is disconnected
-        // with reason 0x8E (3.1.4-3).
+        // with reason 0x8E (3.1.4-3). The outbound channel is bounded and may be
+        // full, so `try_send` can fail; we close the channel itself to ensure the
+        // old connection task exits even if it never drains the Shutdown signal.
         let mut session_present = false;
         if connect.clean_start {
             if let Some(old) = st.sessions.get_mut(&client_id) {
                 if let Some(tx) = old.out.take() {
                     let _ = tx.try_send(Outgoing::Shutdown(ReasonCode::SessionTakenOver));
+                    // Drop `tx` here to close the channel, guaranteeing the old task
+                    // sees `None` from `rx.recv()` and exits (server.rs line 270).
                 }
             }
             st.sessions.remove(&client_id);
@@ -128,6 +132,8 @@ impl Broker {
         } else if let Some(old) = st.sessions.get_mut(&client_id) {
             if let Some(tx) = old.out.take() {
                 let _ = tx.try_send(Outgoing::Shutdown(ReasonCode::SessionTakenOver));
+                // Drop `tx` here to close the channel, guaranteeing the old task
+                // sees `None` from `rx.recv()` and exits (server.rs line 270).
             }
             session_present = true;
         }
