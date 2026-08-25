@@ -139,9 +139,8 @@ fn tokens_match(a: &str, b: &str) -> bool {
     let mut diff = (a.len() != b.len()) as u8;
     // Loop bound is the secret length only; candidate length does not affect
     // iteration count, closing the timing side-channel that leaked token length.
-    for i in 0..b.len() {
+    for (i, &y) in b.iter().enumerate() {
         let x = a.get(i).copied().unwrap_or(0);
-        let y = b[i];
         diff |= x ^ y;
     }
     diff == 0
