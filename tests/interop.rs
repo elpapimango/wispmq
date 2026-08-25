@@ -301,4 +301,3 @@ async fn reserved_client_ids_are_rejected() {
     // Verify that a normal client ID still works.
     let _normal = connect(&addr, "normal-client").await;
 }
-
