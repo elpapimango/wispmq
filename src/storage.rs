@@ -48,6 +48,9 @@ impl SubRecord {
 pub struct SessionRecord {
     pub client_id: String,
     pub session_expiry_interval: u32,
+    /// The authenticated identity that owns this session. `None` for anonymous
+    /// sessions or sessions created before the identity column was added.
+    pub owner_identity: Option<String>,
     pub subscriptions: Vec<SubRecord>,
 }
 
@@ -70,6 +73,7 @@ enum Command {
     UpsertSession {
         client_id: String,
         session_expiry: u32,
+        owner_identity: Option<String>,
     },
     DeleteSession {
         client_id: String,
@@ -157,10 +161,16 @@ impl Storage {
         self.send(Command::DeleteRetained { topic });
     }
 
-    pub fn upsert_session(&self, client_id: String, session_expiry: u32) {
+    pub fn upsert_session(
+        &self,
+        client_id: String,
+        session_expiry: u32,
+        owner_identity: Option<String>,
+    ) {
         self.send(Command::UpsertSession {
             client_id,
             session_expiry,
+            owner_identity,
         });
     }
 
@@ -198,7 +208,8 @@ fn migrate(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS sessions (
             client_id           TEXT PRIMARY KEY,
-            session_expiry      INTEGER NOT NULL
+            session_expiry      INTEGER NOT NULL,
+            owner_identity      TEXT
         );
 
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -216,6 +227,19 @@ fn migrate(conn: &Connection) -> Result<()> {
         PRAGMA foreign_keys = ON;
         "#,
     )?;
+
+    // Migration: add owner_identity column if it doesn't exist (for existing databases).
+    // This is safe because the column is nullable and defaults to NULL.
+    let has_owner_identity: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='owner_identity'")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|count| count > 0)?;
+
+    if !has_owner_identity {
+        conn.execute("ALTER TABLE sessions ADD COLUMN owner_identity TEXT", [])?;
+        tracing::info!("migrated sessions table: added owner_identity column");
+    }
+
     Ok(())
 }
 
@@ -272,15 +296,20 @@ fn load_all(conn: &Connection) -> Result<LoadedState> {
     drop(stmt);
 
     // Sessions with their subscriptions.
-    let mut sess_stmt = conn.prepare("SELECT client_id, session_expiry FROM sessions")?;
-    let sessions: Vec<(String, i64)> = sess_stmt
+    let mut sess_stmt =
+        conn.prepare("SELECT client_id, session_expiry, owner_identity FROM sessions")?;
+    let sessions: Vec<(String, i64, Option<String>)> = sess_stmt
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     drop(sess_stmt);
 
-    for (client_id, expiry) in sessions {
+    for (client_id, expiry, owner_identity) in sessions {
         let mut sub_stmt = conn.prepare(
             "SELECT filter, qos, no_local, retain_as_published, retain_handling, sub_id \
              FROM subscriptions WHERE client_id = ?1",
@@ -304,6 +333,7 @@ fn load_all(conn: &Connection) -> Result<LoadedState> {
         state.sessions.push(SessionRecord {
             client_id,
             session_expiry_interval: expiry as u32,
+            owner_identity,
             subscriptions: subs,
         });
     }
@@ -351,11 +381,12 @@ fn apply(conn: &Connection, cmd: Command) -> rusqlite::Result<()> {
         Command::UpsertSession {
             client_id,
             session_expiry,
+            owner_identity,
         } => {
             conn.execute(
-                "INSERT INTO sessions (client_id, session_expiry) VALUES (?1, ?2) \
-                 ON CONFLICT(client_id) DO UPDATE SET session_expiry=excluded.session_expiry",
-                rusqlite::params![client_id, session_expiry as i64],
+                "INSERT INTO sessions (client_id, session_expiry, owner_identity) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(client_id) DO UPDATE SET session_expiry=excluded.session_expiry, owner_identity=excluded.owner_identity",
+                rusqlite::params![client_id, session_expiry as i64, owner_identity],
             )?;
         }
         Command::DeleteSession { client_id } => {

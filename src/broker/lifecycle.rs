@@ -46,9 +46,11 @@ impl Broker {
                 // simply clamp and accept for robustness.
                 s.session_expiry_interval = new_expiry.min(self.inner.config.max_session_expiry);
                 if s.persistent {
-                    self.inner
-                        .storage
-                        .upsert_session(client_id.to_string(), s.session_expiry_interval);
+                    self.inner.storage.upsert_session(
+                        client_id.to_string(),
+                        s.session_expiry_interval,
+                        s.identity.clone(),
+                    );
                 }
             }
         }

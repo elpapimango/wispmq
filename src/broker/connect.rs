@@ -136,6 +136,45 @@ impl Broker {
                 // sees `None` from `rx.recv()` and exits (server.rs line 270).
             }
             session_present = true;
+
+            // Security: verify that the authenticated identity matches the session
+            // owner. If the identity has changed, clear all subscriptions to prevent
+            // an attacker from taking over a victim's session and receiving their
+            // messages. Anonymous sessions (identity = None) can be claimed by any
+            // identity, but once claimed, they are bound to that identity.
+            let identity_changed = match (&old.identity, &identity) {
+                (Some(old_id), Some(new_id)) => old_id != new_id,
+                (Some(_), None) => true,  // Was authenticated, now anonymous
+                (None, Some(_)) => false, // Was anonymous, now authenticated (allowed)
+                (None, None) => false,    // Both anonymous (allowed)
+            };
+
+            if identity_changed {
+                tracing::warn!(
+                    "client_id {:?} session takeover: identity changed from {:?} to {:?}; \
+                     clearing {} subscription(s) to prevent authorization bypass",
+                    client_id,
+                    old.identity,
+                    identity,
+                    old.subscriptions.len()
+                );
+
+                // Clear subscriptions from memory and storage
+                old.subscriptions.clear();
+                if old.persistent {
+                    self.inner.storage.clear_subscriptions(client_id.clone());
+                }
+
+                // Clear the offline queue to prevent delivery of messages queued
+                // for the previous identity
+                old.queue.clear();
+
+                // Clear inflight QoS state to prevent redelivery of messages
+                // that were authorized for the previous identity
+                old.awaiting_puback.clear();
+                old.awaiting_pubrec.clear();
+                old.awaiting_pubcomp.clear();
+            }
         }
 
         // Create the session if needed.
@@ -151,6 +190,49 @@ impl Broker {
         session.client_receive_maximum = connect.properties.receive_maximum.unwrap_or(65_535);
         session.client_max_packet_size = connect.properties.maximum_packet_size;
 
+        // Security: re-authorize all subscriptions for restored sessions. A session
+        // restored from disk may have been created before ACL enforcement was enabled,
+        // or the ACL policy may have changed while the session was offline. This
+        // ensures that no subscription can become active without passing the current
+        // authorization check.
+        if session_present && !session.subscriptions.is_empty() {
+            let acl = self.acl();
+            if acl.is_enforced() {
+                let who = identity.as_deref().unwrap_or(ANONYMOUS);
+                let mut unauthorized: Vec<(String, Option<String>)> = Vec::new();
+
+                session.subscriptions.retain(|sub| {
+                    if acl.can_subscribe(who, &sub.filter) {
+                        true
+                    } else {
+                        unauthorized.push((sub.filter.clone(), sub.share_name.clone()));
+                        false
+                    }
+                });
+
+                if !unauthorized.is_empty() {
+                    tracing::warn!(
+                        "client_id {:?} ({who}) session resume: removed {} unauthorized subscription(s)",
+                        client_id,
+                        unauthorized.len()
+                    );
+
+                    // Remove from storage as well
+                    if session.persistent {
+                        for (filter, share) in unauthorized {
+                            let key = match share {
+                                Some(s) => format!("$share/{s}/{filter}"),
+                                None => filter,
+                            };
+                            self.inner
+                                .storage
+                                .delete_subscription(client_id.clone(), key);
+                        }
+                    }
+                }
+            }
+        }
+
         // Store the Will for later (abnormal-disconnect) publication.
         session.will = connect.will.as_ref().map(|w| {
             let delay = w.properties.will_delay_interval.unwrap_or(0);
@@ -159,9 +241,11 @@ impl Broker {
 
         // Persist the session if it is meant to outlive the connection.
         if requested_expiry > 0 && !assigned {
-            self.inner
-                .storage
-                .upsert_session(client_id.clone(), requested_expiry);
+            self.inner.storage.upsert_session(
+                client_id.clone(),
+                requested_expiry,
+                identity.clone(),
+            );
         }
 
         // Build the CONNACK advertising server capabilities (3.2.2.3).
