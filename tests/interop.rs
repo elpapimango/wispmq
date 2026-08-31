@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use tokio::net::TcpStream;
 
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::packet::{Connect, Packet, PubAck, Publish, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::framing::{read_packet, write_packet, ReadOutcome};
+use wispmq::packet::{Connect, Packet, PubAck, Publish, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
 /// Start a broker on an ephemeral loopback port and return its address.
 async fn start_broker() -> String {
@@ -28,11 +28,11 @@ async fn start_broker() -> String {
         config,
         Storage::null(),
         Default::default(),
-        pulsemq::acl::Acl::permit_all(),
+        wispmq::acl::Acl::permit_all(),
         None,
     );
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(broker).await;
+        let _ = wispmq::server::run(broker).await;
     });
     // Give the listener a moment to bind.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -91,7 +91,7 @@ async fn qos1_publish_is_routed_to_subscriber() {
             qos: QoS::AtLeastOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(&mut sub, &subscribe, V5).await.unwrap();
@@ -163,7 +163,7 @@ async fn retained_message_delivered_on_subscribe() {
             qos: QoS::AtMostOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(&mut sub, &subscribe, V5).await.unwrap();
@@ -201,7 +201,7 @@ async fn qos2_pubrec_error_gets_no_pubrel() {
             qos: QoS::ExactlyOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(&mut sub, &subscribe, V5).await.unwrap();

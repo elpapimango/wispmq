@@ -14,12 +14,12 @@
 
 use std::time::Instant;
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::config::Config;
-use pulsemq::message::Message;
-use pulsemq::storage::Storage;
-use pulsemq::types::QoS;
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::config::Config;
+use wispmq::message::Message;
+use wispmq::storage::Storage;
+use wispmq::types::QoS;
 
 /// A broker with no listener and no database — only the routing core.
 fn bare_broker() -> Broker {
@@ -56,7 +56,7 @@ fn populate(
     sessions: usize,
     subs_each: usize,
     filter: impl Fn(usize, usize) -> String,
-) -> Vec<tokio::sync::mpsc::Receiver<pulsemq::broker::Outgoing>> {
+) -> Vec<tokio::sync::mpsc::Receiver<wispmq::broker::Outgoing>> {
     let mut receivers = Vec::with_capacity(sessions);
     for s in 0..sessions {
         // Capacity comfortably exceeds every `iters` used in this file (max

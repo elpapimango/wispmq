@@ -4,15 +4,15 @@ Guidance for working in this repository.
 
 ## Project
 
-**PulseMQ** — an **MQTT broker** in Rust (protocols **v5.0**, **v3.1.1**,
+**WispMQ** — an **MQTT broker** in Rust (protocols **v5.0**, **v3.1.1**,
 **v3.1**), built from the OASIS specs (in `spec/`). Async networking via
 **Tokio**; durable state in **SQLite** (bundled via `rusqlite`). Single binary
-`pulsemq` (crate `pulsemq`) plus a library crate. Transports: TCP, TLS, mutual
+`wispmq` (crate `wispmq`) plus a library crate. Transports: TCP, TLS, mutual
 TLS, WebSockets, WebSockets-over-TLS. Repo:
-https://github.com/elpapimango/pulsemq
+https://github.com/elpapimango/wispmq
 
-Display name is **PulseMQ**; the identifier everywhere (crate, binary, image,
-repo, default `pulsemq.toml`) is `pulsemq`. The `MQTT_*` env vars and `mqtt_*`
+Display name is **WispMQ**; the identifier everywhere (crate, binary, image,
+repo, default `wispmq.toml`) is `wispmq`. The `MQTT_*` env vars and `mqtt_*`
 metric names are intentionally kept — they describe the protocol, not the
 project.
 
@@ -40,8 +40,8 @@ breaking changes carried over from the 0.9.1 waypoint (JSON config move, the
 **v0.9.3**, tagged and released (marked latest), is **another breaking
 change** — the config file format switched from JSON to TOML
 (`config::Config::apply_toml_str`, replacing `apply_json_str`;
-`pulsemq.toml` replaces `pulsemq.json`; `pulsemq.example.toml` replaces
-`pulsemq.example.json`). The ACL policy file (`--acl-file`) is unaffected —
+`wispmq.toml` replaces `wispmq.json`; `wispmq.example.toml` replaces
+`wispmq.example.json`). The ACL policy file (`--acl-file`) is unaffected —
 still JSON, a separate document serving a different purpose.
 
 Current status: `Cargo.toml` on `main` has since moved to a **0.9.4 waypoint**
@@ -84,6 +84,14 @@ Milestones, in order:
     GitHub repo (old URLs redirect). GHCR package was renamed with the repo.
 13. Docker workflow set to **`provenance: false`** and the GHCR package pruned
     of orphaned untagged versions.
+14. **Renamed again**, `pulsemq` → **WispMQ** (`wispmq`) — same reason as
+    milestone 12, another name collision. Crate, binary, image, default config
+    filename, GitHub repo (`elpapimango/pulsemq` → `elpapimango/wispmq`, old
+    URLs redirect), plus the companion `pulsemq-cli` → `wispmq-cli` and
+    `pulsemq-addon` → `wispmq-addon` repos. Unlike milestone 12, the old
+    `ghcr.io/elpapimango/pulsemq` GHCR package was **not** renamed (GHCR has
+    no rename operation) — it's left orphaned/public; delete by hand via the
+    web UI if desired.
 
 No known open bugs. Optional follow-ups if wanted: WebSocket server-initiated
 SSE is not implemented (`GET /mcp` → 405); `storage::SubRecord::to_topic_filter`
@@ -127,7 +135,7 @@ Done since 0.9.0:
 - (5B) **Security review** — fixed a PBKDF2 username-enumeration timing leak,
   a Will authorization bypass across ACL reload, and the unbounded offline
   queue (`max_queued_messages`). Secrets are wrapped in `config::Secret`.
-- (3) **Config file is JSON** — `serde_json`, `pulsemq.json`, no `yaml-rust2`.
+- (3) **Config file is JSON** — `serde_json`, `wispmq.json`, no `yaml-rust2`.
 - (4) **`clap` parses the CLI** — the hand-rolled `apply_args`/`HELP` are gone;
   flags live in a `#[derive(Parser)]` struct in `cli.rs`. Env stays in
   `apply_env` so the precedence layers do not collapse.
@@ -162,7 +170,7 @@ Done since 0.9.0:
   config + state topics for every `Snapshot::series()` statistic, so Home
   Assistant's own MQTT integration auto-creates sensor entities. Rides
   `sys_interval` for its cadence. A companion Supervisor add-on repo,
-  [`pulsemq-addon`](https://github.com/elpapimango/pulsemq-addon), wraps the
+  [`wispmq-addon`](https://github.com/elpapimango/wispmq-addon), wraps the
   published image for one-click install — no separate Rust build there.
 - **Config file switched from JSON to TOML** (0.9.3 waypoint, breaking) —
   `apply_toml_str` replaces `apply_json_str`, parsing with the `toml` crate
@@ -333,11 +341,11 @@ ACL (`--acl-file`), which is `RwLock<Arc<Acl>>` and hot-reloaded on SIGHUP
 ## Configuration
 
 Precedence, lowest to highest: **defaults < TOML config file < env vars < CLI
-flags**. Entry point is `Config::load()`. `pulsemq.toml` in the cwd is
+flags**. Entry point is `Config::load()`. `wispmq.toml` in the cwd is
 auto-loaded; `--config` / `MQTT_CONFIG_FILE` overrides. When adding a new option,
 wire it in **all** places: the `Config` struct + `Default`, `apply_env`,
 the `cli::Cli` struct (+ its `apply`), `apply_toml_str` (+ `KNOWN_KEYS`), the
-README tables, and `pulsemq.example.toml`. There are unit tests in `cli` and
+README tables, and `wispmq.example.toml`. There are unit tests in `cli` and
 `config` covering each layer — extend them.
 
 Two options are **structured** and so config-file-first: `bridges` (an array of
@@ -436,8 +444,8 @@ far cheaper than a golden string in the repo, and it covers every field.
 - **zsh does not word-split unquoted variables.** For `mosquitto_pub/sub` flags
   use an array: `CERT=(--cafile ca.pem --cert c.pem --key k.pem -V 5)` then
   `mosquitto_sub "${CERT[@]}" ...`.
-- **Do not `pkill -f release/pulsemq`** — the pattern matches the shell
-  running pkill and kills it (seen as exit 144). Use `killall pulsemq`.
+- **Do not `pkill -f release/wispmq`** — the pattern matches the shell
+  running pkill and kills it (seen as exit 144). Use `killall wispmq`.
 - `mosquitto_pub/sub` cannot speak WebSockets — use the Rust WS integration tests.
 - Put temporary files in the session scratchpad, not the repo.
 - TLS pins the rustls **ring** provider explicitly (`tls.rs`); don't rely on a
@@ -454,7 +462,7 @@ the arm64 image isn't built under slow QEMU emulation — only the tiny target-a
 runtime stage (apt/useradd) is emulated. Runtime is `debian-slim`, non-root uid
 10001, state on `/data`, HEALTHCHECK on `/health`. `docker-compose.yml` is an
 example. `.github/workflows/docker.yml` builds a **multi-arch**
-(`linux/amd64,linux/arm64`) image and pushes to `ghcr.io/elpapimango/pulsemq`
+(`linux/amd64,linux/arm64`) image and pushes to `ghcr.io/elpapimango/wispmq`
 on pushes to `main` and `v*` tags, with `provenance: false` (no attestation
 children; the multi-arch index still has one image manifest per platform, which
 is expected). Two CI workflows: `ci.yml` (fmt/clippy/build/test) and `docker.yml`
@@ -473,9 +481,9 @@ Notes for picking up in a new session/machine:
   WebSockets, so WS/WSS are covered by the Rust integration tests instead.
   The MQTT-spec PDFs in `spec/` need `poppler-utils` to extract text if you
   want to consult them. The published `ghcr.io/elpapimango/pulsemq:0.9.2`
-  image was verified end-to-end this way: `docker run` it, `mosquitto_pub`/
-  `mosquitto_sub` round-tripped a message through it, on top of the
-  `/health`+`/metrics` checks.
+  image (pre-rename name — see milestone 14) was verified end-to-end this
+  way: `docker run` it, `mosquitto_pub`/`mosquitto_sub` round-tripped a
+  message through it, on top of the `/health`+`/metrics` checks.
 - **Not in the repo** (were session-scratch only): the TLS test PKI
   (`ca.pem`, `server.pem/.key`, `client.pem/.key` with CN `test-client`), any
   `passwd` credential file, and `*.db` state — all regenerable. Cert-gen
@@ -489,14 +497,15 @@ Notes for picking up in a new session/machine:
   GHCR **package is public** too, but note its visibility is managed
   *separately* from the repo: flipping the repo does not flip the package.
   There is **no REST endpoint for package visibility** — `gh api -X PATCH
-  /user/packages/container/pulsemq --field visibility=...` 404s regardless of
-  scopes (verified 2026-08-23); change it via the web UI instead:
-  <https://github.com/users/elpapimango/packages/container/pulsemq/settings>
+  /user/packages/container/<name> --field visibility=...` 404s regardless of
+  scopes (verified 2026-08-23 against the pre-rename `pulsemq` package; same
+  GHCR API limitation applies to `wispmq`); change it via the web UI instead:
+  <https://github.com/users/elpapimango/packages/container/wispmq/settings>
   → Danger Zone → Change visibility. The repo's own visibility *does* have a
-  CLI path: `gh repo edit elpapimango/pulsemq --visibility private
+  CLI path: `gh repo edit elpapimango/wispmq --visibility private
   --accept-visibility-change-consequences`.
-- **GitHub/GHCR**: repo `elpapimango/pulsemq`; image
-  `ghcr.io/elpapimango/pulsemq`. Image pushes happen only via `docker.yml`
+- **GitHub/GHCR**: repo `elpapimango/wispmq`; image
+  `ghcr.io/elpapimango/wispmq`. Image pushes happen only via `docker.yml`
   (workflow `GITHUB_TOKEN` has `packages: write`). Managing GHCR packages from
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
@@ -513,10 +522,10 @@ Notes for picking up in a new session/machine:
   show none of it in the default build).
 - When adding a config option, wire it through Config + Default, `apply_env`,
   the `cli::Cli` struct (+ its `apply`), `apply_toml_str` (+ `KNOWN_KEYS`),
-  README, and `pulsemq.example.toml` — with tests. (See the Configuration
+  README, and `wispmq.example.toml` — with tests. (See the Configuration
   checklist.)
 - Comments cite the spec section they implement; match the surrounding density.
 - Commit/push only when asked. Branch is `main`. End commit messages with the
   `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` trailer.
-- Real `pulsemq.toml` and `*.db` files are gitignored (may hold secrets/state);
-  the tracked template is `pulsemq.example.toml`.
+- Real `wispmq.toml` and `*.db` files are gitignored (may hold secrets/state);
+  the tracked template is `wispmq.example.toml`.

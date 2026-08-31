@@ -7,9 +7,9 @@
 
 services:
   mqtt:
-    image: ghcr.io/elpapimango/pulsemq:latest
+    image: ghcr.io/elpapimango/wispmq:latest
     # build: .
-    container_name: pulsemq
+    container_name: wispmq
     restart: unless-stopped
     ports:
       - "1883:1883" # MQTT (plain)

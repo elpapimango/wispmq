@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Passwords are stored as PBKDF2-HMAC-SHA256 with a per-user random salt.
-//! Generate an entry with `pulsemq --hash-password <username>` (the password
+//! Generate an entry with `wispmq --hash-password <username>` (the password
 //! is read from stdin). Verification is constant-time (via `ring::pbkdf2`).
 
 use std::collections::HashMap;

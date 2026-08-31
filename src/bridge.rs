@@ -127,7 +127,7 @@ pub fn parse_bridges(doc: &Value, source: &str) -> Result<Vec<BridgeConfig>> {
         let at = format!("{source}: bridges[{i}]");
         let name = req_str(b, "name", &at)?;
         let address = req_str(b, "address", &at)?;
-        let client_id = opt_str(b, "client_id").unwrap_or_else(|| format!("pulsemq-bridge-{name}"));
+        let client_id = opt_str(b, "client_id").unwrap_or_else(|| format!("wispmq-bridge-{name}"));
         let keepalive = b["keepalive"].as_i64().unwrap_or(60);
         let keepalive = u16::try_from(keepalive)
             .map_err(|_| cfg(format!("{at}: keepalive out of range (0-65535)")))?;

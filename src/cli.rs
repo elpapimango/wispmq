@@ -24,9 +24,9 @@ use crate::types::QoS;
 /// `listen_addr` is `--listen-addr`.
 #[derive(Debug, Parser)]
 #[command(
-    name = "pulsemq",
+    name = "wispmq",
     version,
-    about = "PulseMQ — an MQTT v5.0 / v3.1.1 / v3.1 broker (Tokio + SQLite)",
+    about = "WispMQ — an MQTT v5.0 / v3.1.1 / v3.1 broker (Tokio + SQLite)",
     after_help = "Every option can also be set via the environment variable shown in brackets, or \
                   in a TOML config file (key = the option name with underscores, e.g. \
                   listen_addr). Precedence, lowest to highest: config file < environment < \
@@ -34,7 +34,7 @@ use crate::types::QoS;
                   Logging verbosity is controlled by RUST_LOG (default: info)."
 )]
 pub(crate) struct Cli {
-    /// Load this TOML config file [MQTT_CONFIG_FILE]. If omitted, pulsemq.toml
+    /// Load this TOML config file [MQTT_CONFIG_FILE]. If omitted, wispmq.toml
     /// in the working directory is used when present.
     #[arg(long, value_name = "FILE", help_heading = "Config file")]
     pub config: Option<String>,
@@ -269,7 +269,7 @@ pub(crate) struct Cli {
     pub otlp_logs: Option<bool>,
 
     /// service.name on the exported OTLP resource [MQTT_SERVICE_NAME]
-    /// (default pulsemq)
+    /// (default wispmq)
     #[arg(
         long,
         value_name = "NAME",
@@ -441,7 +441,7 @@ mod tests {
 
     /// Parse flags as if they were passed on the command line.
     fn parse(args: &[&str]) -> Cli {
-        let mut argv = vec!["pulsemq"];
+        let mut argv = vec!["wispmq"];
         argv.extend_from_slice(args);
         Cli::try_parse_from(argv).expect("flags should parse")
     }
@@ -485,9 +485,9 @@ mod tests {
     #[test]
     fn equals_form_and_unknown_flag() {
         assert_eq!(config_from(&["--db-path=/tmp/x.db"]).db_path, "/tmp/x.db");
-        assert!(Cli::try_parse_from(["pulsemq", "--nope"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--nope"]).is_err());
         // A flag that needs a value must not silently swallow the next flag.
-        assert!(Cli::try_parse_from(["pulsemq", "--db-path"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--db-path"]).is_err());
     }
 
     #[test]
@@ -571,11 +571,11 @@ mod tests {
         assert_eq!(cfg.server_keep_alive, Some(45));
 
         // Out-of-range and non-numeric QoS are usage errors, not silent defaults.
-        assert!(Cli::try_parse_from(["pulsemq", "--maximum-qos", "9"]).is_err());
-        assert!(Cli::try_parse_from(["pulsemq", "--maximum-qos", "high"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--maximum-qos", "9"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--maximum-qos", "high"]).is_err());
         // clap's typed parsing rejects out-of-range integers too.
-        assert!(Cli::try_parse_from(["pulsemq", "--receive-maximum", "70000"]).is_err());
-        assert!(Cli::try_parse_from(["pulsemq", "--listen-addr", "not-an-addr"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--receive-maximum", "70000"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--listen-addr", "not-an-addr"]).is_err());
     }
 
     #[test]
@@ -587,7 +587,7 @@ mod tests {
         // pre-clap invocation keeps its meaning.
         assert!(config_from(&["--allow-anonymous"]).allow_anonymous);
         assert!(!config_from(&["--retain-available", "0"]).retain_available);
-        assert!(Cli::try_parse_from(["pulsemq", "--allow-anonymous", "maybe"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--allow-anonymous", "maybe"]).is_err());
     }
 
     #[test]
@@ -647,8 +647,8 @@ mod tests {
     fn malformed_otlp_header_is_a_usage_error() {
         // Validated by clap's value parser, so a typo fails at startup with a
         // usage message instead of quietly exporting without the API key.
-        assert!(Cli::try_parse_from(["pulsemq", "--otlp-header", "no-equals"]).is_err());
-        assert!(Cli::try_parse_from(["pulsemq", "--otlp-header", "=novalue"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--otlp-header", "no-equals"]).is_err());
+        assert!(Cli::try_parse_from(["wispmq", "--otlp-header", "=novalue"]).is_err());
     }
 
     #[test]
@@ -678,11 +678,11 @@ mod tests {
             ("--version", ErrorKind::DisplayVersion),
             ("-V", ErrorKind::DisplayVersion),
         ] {
-            let err = Cli::try_parse_from(["pulsemq", flag]).expect_err("should not run");
+            let err = Cli::try_parse_from(["wispmq", flag]).expect_err("should not run");
             assert_eq!(err.kind(), kind, "{flag}");
         }
         // The version string is the crate version, not a hand-maintained one.
-        let rendered = Cli::try_parse_from(["pulsemq", "--version"])
+        let rendered = Cli::try_parse_from(["wispmq", "--version"])
             .expect_err("should not run")
             .to_string();
         assert!(rendered.contains(crate::config::VERSION), "{rendered}");

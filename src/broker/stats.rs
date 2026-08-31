@@ -161,13 +161,13 @@ impl Broker {
 /// when the user's own data changes.
 ///
 /// Scoped to *this instance's* `service_name`/`ha_discovery_prefix`, not a
-/// blanket `homeassistant/#`/`pulsemq/#` match: those are ordinary,
+/// blanket `homeassistant/#`/`wispmq/#` match: those are ordinary,
 /// widely-shared topic spaces (other devices publish their own discovery
 /// configs there too), so only the exact prefixes this broker publishes to
 /// are excluded.
 fn is_broker_bookkeeping(topic: &str, cfg: &Config) -> bool {
     topic.starts_with(SYS_PREFIX)
-        || topic.starts_with(&format!("pulsemq/{}/", cfg.service_name))
+        || topic.starts_with(&format!("wispmq/{}/", cfg.service_name))
         || topic.starts_with(&format!(
             "{}/sensor/{}/",
             cfg.ha_discovery_prefix, cfg.service_name

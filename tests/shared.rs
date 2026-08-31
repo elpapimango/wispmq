@@ -14,14 +14,14 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::framing::{read_packet, write_packet, ReadOutcome};
+use wispmq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
 mod common;
 use common::free_addr;
@@ -41,7 +41,7 @@ async fn start_broker() -> SocketAddr {
         None,
     );
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(broker).await;
+        let _ = wispmq::server::run(broker).await;
     });
     sleep(Duration::from_millis(100)).await;
     addr

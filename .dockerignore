@@ -7,7 +7,7 @@
 *.db
 *.db-wal
 *.db-shm
-pulsemq.json
+wispmq.json
 spec/
 
 # Editor / OS cruft

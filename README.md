@@ -1,13 +1,13 @@
 <p align="center">
-  <img src=".github/branding/banner.png" alt="PulseMQ — MQTT v5.0 / v3.1.1 / v3.1 broker in Rust" width="100%">
+  <img src=".github/branding/banner.png" alt="WispMQ — MQTT v5.0 / v3.1.1 / v3.1 broker in Rust" width="100%">
 </p>
 
-# PulseMQ
+# WispMQ
 
-[![CI](https://github.com/elpapimango/pulsemq/actions/workflows/ci.yml/badge.svg)](https://github.com/elpapimango/pulsemq/actions/workflows/ci.yml)
-[![Docker](https://github.com/elpapimango/pulsemq/actions/workflows/docker.yml/badge.svg)](https://github.com/elpapimango/pulsemq/actions/workflows/docker.yml)
-[![Container image](https://img.shields.io/badge/ghcr.io-pulsemq-2496ed?logo=docker&logoColor=white)](https://github.com/elpapimango/pulsemq/pkgs/container/pulsemq)
-[![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant&logoColor=white)](https://github.com/elpapimango/pulsemq-addon)
+[![CI](https://github.com/elpapimango/wispmq/actions/workflows/ci.yml/badge.svg)](https://github.com/elpapimango/wispmq/actions/workflows/ci.yml)
+[![Docker](https://github.com/elpapimango/wispmq/actions/workflows/docker.yml/badge.svg)](https://github.com/elpapimango/wispmq/actions/workflows/docker.yml)
+[![Container image](https://img.shields.io/badge/ghcr.io-wispmq-2496ed?logo=docker&logoColor=white)](https://github.com/elpapimango/wispmq/pkgs/container/wispmq)
+[![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-41BDF5?logo=home-assistant&logoColor=white)](https://github.com/elpapimango/wispmq-addon)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 > [!WARNING]
@@ -99,7 +99,7 @@ path.
 
 ```bash
 cargo build --release
-./target/release/pulsemq
+./target/release/wispmq
 ```
 
 The broker listens for MQTT on `0.0.0.0:1883` by default, serves the admin
@@ -114,7 +114,7 @@ A published image is available from the GitHub Container Registry:
 docker run -d --name mqtt \
   -p 1883:1883 -p 9001:9001 \
   -v mqtt-data:/data \
-  ghcr.io/elpapimango/pulsemq:latest
+  ghcr.io/elpapimango/wispmq:latest
 ```
 
 Or with Compose (see [`docker-compose.yml`](docker-compose.yml)):
@@ -130,8 +130,8 @@ its SQLite state in the `/data` volume, exposes `1883` (MQTT), `8883` (TLS),
 `8080` (WebSockets) and `9001` (admin), and has a `HEALTHCHECK` against
 `/health`. Configure it with the same environment variables described below
 (mount certs / password / ACL / config files into the container, e.g. under
-`/config`). Build locally with `docker build -t pulsemq .`, or for another
-architecture with `docker buildx build --platform linux/arm64 -t pulsemq .`.
+`/config`). Build locally with `docker build -t wispmq .`, or for another
+architecture with `docker buildx build --platform linux/arm64 -t wispmq .`.
 
 ## Configuration
 
@@ -143,7 +143,7 @@ increasing precedence:
 defaults  <  config file  <  environment variables  <  command-line flags
 ```
 
-The config file is discovered automatically: if `pulsemq.toml` exists in the
+The config file is discovered automatically: if `wispmq.toml` exists in the
 working directory it is loaded. A different path can be given with
 `--config <FILE>` or `MQTT_CONFIG_FILE`; an explicitly named file that is
 missing or invalid is a startup error. Unknown keys and wrong value types are
@@ -152,7 +152,7 @@ rejected, so a typo fails loudly at startup instead of being ignored.
 Keys are the option names with underscores (e.g. `listen_addr`) — the same
 names as the environment variables minus the `MQTT_` prefix, and the same as
 the CLI flags with `-` replaced by `_`. A minimal, ready-to-copy file ships as
-[`pulsemq.example.toml`](pulsemq.example.toml).
+[`wispmq.example.toml`](wispmq.example.toml).
 
 TOML supports `#` comments, so annotate the file however you like; the table
 below is still the authoritative per-option reference. A full file looks like:
@@ -185,7 +185,7 @@ server_keep_alive = 60
 
 otlp_endpoint = "http://127.0.0.1:4318"
 otlp_interval = 60
-service_name = "pulsemq"
+service_name = "wispmq"
 
 ha_discovery = false
 ha_discovery_prefix = "homeassistant"
@@ -211,7 +211,7 @@ Every setting is also available as a command-line flag and an environment
 variable. Run `--help` for the full list:
 
 ```bash
-./target/release/pulsemq --help
+./target/release/wispmq --help
 ```
 
 ```
@@ -292,7 +292,7 @@ probes work without credentials. When the variable is unset the endpoints are
 unauthenticated and the broker logs a warning at startup.
 
 ```bash
-MQTT_ADMIN_TOKEN=s3cr3t ./target/release/pulsemq
+MQTT_ADMIN_TOKEN=s3cr3t ./target/release/wispmq
 # then:
 curl -H 'Authorization: Bearer s3cr3t' http://127.0.0.1:9001/metrics
 ```
@@ -384,7 +384,7 @@ mosquitto_sub -h 127.0.0.1 -p 1883 -V 5 -t '$SYS/#' -v
 ```
 
 ```
-$SYS/broker/version PulseMQ 0.9.4
+$SYS/broker/version WispMQ 0.9.4
 $SYS/broker/uptime 15 seconds
 $SYS/broker/clients/connected 1
 $SYS/broker/clients/total 1
@@ -422,12 +422,12 @@ scrape_configs:
 
 ### Home Assistant MQTT Discovery
 
-Running Home Assistant OS or Supervised? [**pulsemq-addon**](https://github.com/elpapimango/pulsemq-addon)
-installs PulseMQ straight from the Add-on Store (`ha_discovery` on by
+Running Home Assistant OS or Supervised? [**wispmq-addon**](https://github.com/elpapimango/wispmq-addon)
+installs WispMQ straight from the Add-on Store (`ha_discovery` on by
 default) — no manual Docker setup needed. Otherwise, wire it up by hand:
 
 Set `ha_discovery = true` (or `--ha-discovery` / `MQTT_HA_DISCOVERY=true`) and
-PulseMQ publishes retained [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+WispMQ publishes retained [MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
 config for every statistic in the metrics list, plus its current value —
 Home Assistant's own MQTT integration then auto-creates a sensor entity per
 statistic with no add-on, custom component, or `configuration.yaml` edit on
@@ -436,18 +436,18 @@ the HA side. Off by default.
 ```toml
 ha_discovery = true
 ha_discovery_prefix = "homeassistant"
-service_name = "pulsemq"
+service_name = "wispmq"
 ```
 
 `ha_discovery_prefix` must match Home Assistant's own discovery prefix
 (`homeassistant` unless changed there). `service_name` scopes both the topics
 and the entities' `unique_id`/device grouping — set it to something like
-`edge-1` if more than one PulseMQ instance publishes into the same broker so
+`edge-1` if more than one WispMQ instance publishes into the same broker so
 their sensors don't collide.
 
 ```
-homeassistant/sensor/pulsemq/mqtt_clients_connected/config  {"name":"clients connected","unique_id":"pulsemq_pulsemq_mqtt_clients_connected","state_topic":"pulsemq/pulsemq/mqtt_clients_connected","state_class":"measurement","device":{...}}
-pulsemq/pulsemq/mqtt_clients_connected  1
+homeassistant/sensor/wispmq/mqtt_clients_connected/config  {"name":"clients connected","unique_id":"wispmq_wispmq_mqtt_clients_connected","state_topic":"wispmq/wispmq/mqtt_clients_connected","state_class":"measurement","device":{...}}
+wispmq/wispmq/mqtt_clients_connected  1
 ```
 
 This rides `sys_interval` for its refresh cadence — discovery config is
@@ -460,7 +460,7 @@ only, never written to SQLite.
 ### OTLP telemetry export (push)
 
 `/metrics` and `$SYS` both wait to be *read*. On an edge box or a Pi there is
-often nothing scraping it and no route in, so PulseMQ can also **push** its
+often nothing scraping it and no route in, so WispMQ can also **push** its
 metrics and logs to an OpenTelemetry (OTLP) endpoint. One exporter reaches an
 OTel Collector, Datadog, Splunk Observability, Grafana Cloud or Honeycomb —
 and the Collector fans out to anything else.
@@ -482,7 +482,7 @@ otlp_protocol = "http"
 otlp_interval = 60
 otlp_metrics = true
 otlp_logs = true
-service_name = "pulsemq"
+service_name = "wispmq"
 
 [otlp_headers]
 "DD-API-KEY" = "..."
@@ -567,7 +567,7 @@ implemented; a `GET /mcp` returns 405.)
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MQTT_CONFIG_FILE` | _(auto)_ | TOML config file path (else `pulsemq.toml` in cwd) |
+| `MQTT_CONFIG_FILE` | _(auto)_ | TOML config file path (else `wispmq.toml` in cwd) |
 | `MQTT_LISTEN_ADDR` | `0.0.0.0:1883` | MQTT listener bind address |
 | `MQTT_TLS_CERT` / `MQTT_TLS_KEY` | _(unset)_ | PEM cert + key; both set = TLS on the MQTT port |
 | `MQTT_TLS_CLIENT_CA` | _(unset)_ | PEM CA bundle; enables mutual TLS on the MQTT port |
@@ -600,7 +600,7 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_OTLP_INTERVAL` | `60` | Metric export interval (s) |
 | `MQTT_OTLP_METRICS` | `true` | Export metrics |
 | `MQTT_OTLP_LOGS` | `true` | Export logs |
-| `MQTT_SERVICE_NAME` | `pulsemq` | `service.name` on the exported OTLP resource |
+| `MQTT_SERVICE_NAME` | `wispmq` | `service.name` on the exported OTLP resource |
 | `MQTT_HA_DISCOVERY` | `false` | Publish Home Assistant MQTT Discovery config + state topics |
 | `MQTT_HA_DISCOVERY_PREFIX` | `homeassistant` | Home Assistant's discovery topic prefix |
 | `RUST_LOG` | `info` | Log level (`tracing` filter) |
@@ -636,10 +636,10 @@ and v5** clients interchangeably (the version is negotiated per connection).
 
 ```bash
 # Plain MQTT on 1883 and MQTT-over-WebSockets on 8080, together:
-./target/release/pulsemq --listen-addr 0.0.0.0:1883 --ws-listen-addr 0.0.0.0:8080
+./target/release/wispmq --listen-addr 0.0.0.0:1883 --ws-listen-addr 0.0.0.0:8080
 
 # WebSockets over TLS (wss):
-./target/release/pulsemq \
+./target/release/wispmq \
   --ws-listen-addr 0.0.0.0:8443 --ws-tls-cert cert.pem --ws-tls-key key.pem
 ```
 
@@ -659,7 +659,7 @@ MQTT_LISTEN_ADDR=0.0.0.0:8883 \
 MQTT_TLS_CERT=cert.pem  MQTT_TLS_KEY=key.pem \
 MQTT_ADMIN_ADDR=0.0.0.0:9443 \
 MQTT_ADMIN_TLS_CERT=cert.pem  MQTT_ADMIN_TLS_KEY=key.pem \
-./target/release/pulsemq
+./target/release/wispmq
 ```
 
 ```bash
@@ -684,7 +684,7 @@ certificate that chains to a CA in that store, or the TLS handshake is refused.
 openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 365 -subj "/CN=My-CA"
 # ... sign server.pem (with SANs) and client.pem against ca.pem ...
 
-./target/release/pulsemq \
+./target/release/wispmq \
   --listen-addr 0.0.0.0:8883 \
   --tls-cert server.pem --tls-key server.key --tls-client-ca ca.pem \
   --admin-addr 0.0.0.0:9443 \
@@ -714,7 +714,7 @@ username/password authentication on CONNECT. Passwords are stored as
 constant-time. Generate an entry (password read from stdin):
 
 ```bash
-pulsemq --hash-password alice >> passwd     # prompts for the password
+wispmq --hash-password alice >> passwd     # prompts for the password
 ```
 
 Each line is `username:pbkdf2_sha256$iterations$salt$hash`. When a password file
@@ -785,7 +785,7 @@ error is logged and the **previous policy is kept**.
 
 ```bash
 # edit acl.json, then:
-kill -HUP "$(pgrep -f target/release/pulsemq)"
+kill -HUP "$(pgrep -f target/release/wispmq)"
 ```
 
 Reloading is a no-op (logged) when no `--acl-file` was configured.
@@ -802,7 +802,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -V 5 -t 'sensors/temp' -q 1 -m '21.5C'
 
 ## Forwarding (broker-to-broker bridge)
 
-PulseMQ can **forward** messages to and from remote MQTT brokers (like a
+WispMQ can **forward** messages to and from remote MQTT brokers (like a
 mosquitto bridge) — e.g. to aggregate edge brokers up to a central one, or fan a
 central broker's topics down to the edge. Each bridge is an outbound MQTT client
 in its own task with **automatic reconnect + backoff**, over any transport
@@ -813,7 +813,7 @@ TOML config file (config-file only):
 [[bridges]]
 name = "central"
 address = "tls://central.example:8883"
-client_id = "pulsemq-edge-1"
+client_id = "wispmq-edge-1"
 username = "edge"
 password = "secret"
 keepalive = 30
@@ -842,7 +842,7 @@ qos = 0
 | --- | --- | --- |
 | `name` | yes | Identifies the bridge in logs and metrics |
 | `address` | yes | `tcp`/`tls`/`ws`/`wss` (`mqtt`/`mqtts` alias `tcp`/`tls`) |
-| `client_id` | no | Defaults to `pulsemq-bridge-<name>` |
+| `client_id` | no | Defaults to `wispmq-bridge-<name>` |
 | `username`, `password` | no | Credentials for the remote broker |
 | `keepalive` | no | Seconds; default 60 |
 | `protocol_version` | no | `3`, `4`, or `5`; default 5 |

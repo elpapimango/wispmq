@@ -4,17 +4,17 @@
 //! then command-line flags (see `config::Config`). State is persisted to
 //! SQLite and reloaded on startup.
 
-use pulsemq::acl::Acl;
-use pulsemq::admin;
-use pulsemq::auth::{self, Credentials};
-use pulsemq::broker::Broker;
-use pulsemq::config::{Config, Startup};
-use pulsemq::error::Result;
-use pulsemq::otel;
-use pulsemq::server;
-use pulsemq::storage::Storage;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use wispmq::acl::Acl;
+use wispmq::admin;
+use wispmq::auth::{self, Credentials};
+use wispmq::broker::Broker;
+use wispmq::config::{Config, Startup};
+use wispmq::error::Result;
+use wispmq::otel;
+use wispmq::server;
+use wispmq::storage::Storage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -157,14 +157,14 @@ async fn main() -> Result<()> {
             bridge_cfg.address
         );
         let bridge_broker = broker.clone();
-        tokio::spawn(pulsemq::bridge::run(bridge_broker, bridge_cfg));
+        tokio::spawn(wispmq::bridge::run(bridge_broker, bridge_cfg));
     }
 
     // Periodic $SYS/broker status topics (no-op when sys_interval is 0).
-    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    tokio::spawn(wispmq::sysinfo::run(broker.clone()));
 
     // Periodic connection-rate-limiter cleanup (no-op when disabled).
-    tokio::spawn(pulsemq::ratelimit::run(broker.clone()));
+    tokio::spawn(wispmq::ratelimit::run(broker.clone()));
 
     // Reload the ACL policy on SIGHUP (Unix). The rest of the broker keeps
     // running; a bad policy file is reported and the previous one is kept.
@@ -253,7 +253,7 @@ fn hash_password_cmd(username: Option<&str>) -> Result<()> {
             let mut buf = String::new();
             std::io::stdin()
                 .read_to_string(&mut buf)
-                .map_err(pulsemq::error::MqttError::Io)?;
+                .map_err(wispmq::error::MqttError::Io)?;
             buf.trim_end_matches(['\r', '\n']).to_string()
         }
     };

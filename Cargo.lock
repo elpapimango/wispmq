@@ -1287,31 +1287,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pulsemq"
-version = "0.9.4"
-dependencies = [
- "bytes",
- "clap",
- "futures-util",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "rcgen",
- "ring",
- "rusqlite",
- "rustls-pemfile",
- "serde_json",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "toml",
- "tracing",
- "tracing-subscriber",
- "x509-parser 0.16.0",
-]
-
-[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2506,6 +2481,31 @@ name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+
+[[package]]
+name = "wispmq"
+version = "0.9.4"
+dependencies = [
+ "bytes",
+ "clap",
+ "futures-util",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rcgen",
+ "ring",
+ "rusqlite",
+ "rustls-pemfile",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "x509-parser 0.16.0",
+]
 
 [[package]]
 name = "wit-bindgen"

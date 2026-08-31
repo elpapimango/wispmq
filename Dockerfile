@@ -32,17 +32,17 @@ RUN set -eux; \
     esac; \
     features=""; \
     if [ -n "$FEATURES" ]; then features="--features $FEATURES"; fi; \
-    cargo build --release --locked --target "$target" --bin pulsemq $features; \
-    cp "target/$target/release/pulsemq" /pulsemq
+    cargo build --release --locked --target "$target" --bin wispmq $features; \
+    cp "target/$target/release/wispmq" /wispmq
 
 # ---- Runtime stage (target architecture) ----
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -u 10001 -M -s /usr/sbin/nologin pulsemq
+    && useradd -u 10001 -M -s /usr/sbin/nologin wispmq
 
-COPY --from=builder /pulsemq /usr/local/bin/pulsemq
+COPY --from=builder /wispmq /usr/local/bin/wispmq
 
 # Persistent state (SQLite DB) lives here.
 WORKDIR /data
@@ -63,4 +63,4 @@ USER 10001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -fsS http://127.0.0.1:9001/health || exit 1
 
-ENTRYPOINT ["pulsemq"]
+ENTRYPOINT ["wispmq"]

@@ -7,10 +7,10 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::config::Config;
-use pulsemq::storage::Storage;
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::config::Config;
+use wispmq::storage::Storage;
 
 mod common;
 use common::free_addr;
@@ -36,7 +36,7 @@ fn write_mtls_certs(
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params
         .distinguished_name
-        .push(DnType::CommonName, "pulsemq test CA");
+        .push(DnType::CommonName, "wispmq test CA");
     ca_params.key_usages.push(KeyUsagePurpose::DigitalSignature);
     ca_params.key_usages.push(KeyUsagePurpose::KeyCertSign);
     ca_params.key_usages.push(KeyUsagePurpose::CrlSign);
@@ -94,7 +94,7 @@ async fn start_admin(config: Config) -> Broker {
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::admin::run(b).await;
+        let _ = wispmq::admin::run(b).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
     broker
@@ -120,7 +120,7 @@ async fn admin_mutual_tls_serves_a_client_with_a_valid_certificate() {
     let ca_path = ca_path.to_string_lossy().into_owned();
     let client_cert_path = client_cert_path.to_string_lossy().into_owned();
     let client_key_path = client_key_path.to_string_lossy().into_owned();
-    let tls_config = pulsemq::tls::client_config(
+    let tls_config = wispmq::tls::client_config(
         Some(&ca_path),
         Some(&client_cert_path),
         Some(&client_key_path),
@@ -181,7 +181,7 @@ async fn admin_mutual_tls_rejects_a_client_without_a_certificate() {
     // learning the server rejected the missing certificate) — the rejection
     // is only observable once the connection is actually used.
     let ca_path = ca_path.to_string_lossy().into_owned();
-    let tls_config = pulsemq::tls::client_config(Some(&ca_path), None, None, false).unwrap();
+    let tls_config = wispmq::tls::client_config(Some(&ca_path), None, None, false).unwrap();
     let connector = tokio_rustls::TlsConnector::from(tls_config);
     let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from("localhost").unwrap();
 

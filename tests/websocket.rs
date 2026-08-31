@@ -13,13 +13,13 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{ProtocolVersion, QoS, ReasonCode};
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::packet::{Connect, Packet, Publish, RetainHandling, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{ProtocolVersion, QoS, ReasonCode};
 
 mod common;
 use common::free_addr;
@@ -112,7 +112,7 @@ async fn start_ws_broker_with_acl(config: Config, acl: Acl) -> Broker {
     let broker = Broker::new(config, Storage::null(), Default::default(), acl, None);
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run_ws(b).await;
+        let _ = wispmq::server::run_ws(b).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
     broker
@@ -140,7 +140,7 @@ fn write_mtls_certs(
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params
         .distinguished_name
-        .push(DnType::CommonName, "pulsemq test CA");
+        .push(DnType::CommonName, "wispmq test CA");
     ca_params.key_usages.push(KeyUsagePurpose::DigitalSignature);
     ca_params.key_usages.push(KeyUsagePurpose::KeyCertSign);
     ca_params.key_usages.push(KeyUsagePurpose::CrlSign);
@@ -404,7 +404,7 @@ async fn mqtt_over_websocket_with_mutual_tls_enforces_acl_by_cert_cn() {
     let ca_path = ca_path.to_string_lossy().into_owned();
     let client_cert_path = client_cert_path.to_string_lossy().into_owned();
     let client_key_path = client_key_path.to_string_lossy().into_owned();
-    let tls_config = pulsemq::tls::client_config(
+    let tls_config = wispmq::tls::client_config(
         Some(&ca_path),
         Some(&client_cert_path),
         Some(&client_key_path),
@@ -517,7 +517,7 @@ async fn mqtt_over_websocket_without_client_cert_is_rejected_by_mutual_tls() {
     // — so the rejection is only observable once the connection is actually
     // used (here, the WebSocket upgrade), not at `connect` itself.
     let ca_path = ca_path.to_string_lossy().into_owned();
-    let tls_config = pulsemq::tls::client_config(Some(&ca_path), None, None, false).unwrap();
+    let tls_config = wispmq::tls::client_config(Some(&ca_path), None, None, false).unwrap();
     let connector = tokio_rustls::TlsConnector::from(tls_config);
     let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from("localhost").unwrap();
 

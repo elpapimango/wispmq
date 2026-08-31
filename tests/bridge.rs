@@ -8,16 +8,16 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 
-use pulsemq::acl::Acl;
-use pulsemq::bridge::{BridgeConfig, BridgeTopic, Direction};
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::message::Message;
-use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
+use wispmq::acl::Acl;
+use wispmq::bridge::{BridgeConfig, BridgeTopic, Direction};
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::framing::{read_packet, write_packet, ReadOutcome};
+use wispmq::message::Message;
+use wispmq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
 
 mod common;
 use common::free_addr;
@@ -37,7 +37,7 @@ fn make_broker(addr: SocketAddr) -> Broker {
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(b).await;
+        let _ = wispmq::server::run(b).await;
     });
     broker
 }
@@ -104,7 +104,7 @@ async fn subscribe(s: &mut TcpStream, filter: &str) {
             qos: QoS::AtMostOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(s, &sub, V5).await.unwrap();
@@ -167,7 +167,7 @@ async fn bridge_forwards_both_directions() {
     sleep(Duration::from_millis(100)).await;
 
     // Bridge lives on A and connects to B.
-    tokio::spawn(pulsemq::bridge::run(
+    tokio::spawn(wispmq::bridge::run(
         broker_a.clone(),
         bridge_config("t", addr_b),
     ));
@@ -201,7 +201,7 @@ async fn bridge_reconnects_when_remote_starts_late() {
     let broker_a = make_broker(addr_a);
 
     // Start the bridge before B exists: its first connect fails and it backs off.
-    tokio::spawn(pulsemq::bridge::run(
+    tokio::spawn(wispmq::bridge::run(
         broker_a.clone(),
         bridge_config("late", addr_b),
     ));
@@ -242,7 +242,7 @@ async fn bridge_traffic_is_counted_in_the_packet_metrics() {
     assert_eq!(before.packet_sent[PacketType::Connect as usize], 0);
     assert_eq!(before.packet_received[PacketType::Connack as usize], 0);
 
-    tokio::spawn(pulsemq::bridge::run(
+    tokio::spawn(wispmq::bridge::run(
         broker_a.clone(),
         bridge_config("metrics", addr_b),
     ));

@@ -499,7 +499,7 @@ mod tests {
     /// a mangled one.
     #[test]
     fn retained_message_survives_a_reopen() {
-        let dir = std::env::temp_dir().join(format!("pulsemq-storage-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wispmq-storage-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("retained.db");
         let path_str = path.to_str().unwrap().to_string();

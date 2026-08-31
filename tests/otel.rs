@@ -17,11 +17,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{sleep, timeout};
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::config::Config;
-use pulsemq::otel;
-use pulsemq::storage::Storage;
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::config::Config;
+use wispmq::otel;
+use wispmq::storage::Storage;
 
 /// One request the fake collector received.
 #[derive(Debug, Clone)]
@@ -157,7 +157,7 @@ async fn metrics_are_exported_to_the_configured_endpoint() {
         otlp_endpoint: Some(format!("http://{addr}")),
         otlp_interval: 1,
         otlp_logs: false, // logs install a subscriber layer; metrics stand alone
-        otlp_headers: pulsemq::config::OtlpHeaders::from_pairs([(
+        otlp_headers: wispmq::config::OtlpHeaders::from_pairs([(
             "DD-API-KEY".to_string(),
             "s3cret".to_string(),
         )]),
@@ -202,8 +202,8 @@ async fn metrics_are_exported_to_the_configured_endpoint() {
     assert!(has("mqtt_sessions_total"), "gauge lost its name");
     assert!(has("mqtt_subscriptions_total"), "gauge lost its name");
     // Resource attributes identify the sender.
-    assert!(has("pulsemq"), "no service.name on the resource");
-    assert!(has(pulsemq::config::VERSION), "no service.version");
+    assert!(has("wispmq"), "no service.name on the resource");
+    assert!(has(wispmq::config::VERSION), "no service.version");
 
     tel.shutdown();
 }
@@ -287,7 +287,7 @@ async fn an_unreachable_collector_does_not_stop_the_broker() {
     let snapshot = timeout(Duration::from_secs(1), async { broker.snapshot() })
         .await
         .expect("broker.snapshot() blocked while exports were failing");
-    assert_eq!(snapshot.version, pulsemq::config::VERSION);
+    assert_eq!(snapshot.version, wispmq::config::VERSION);
 
     tel.shutdown();
 }

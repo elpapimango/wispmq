@@ -527,7 +527,7 @@ impl Snapshot {
         let mut t: Vec<(String, String)> = Vec::with_capacity(64);
         let mut add = |topic: &str, value: String| t.push((format!("$SYS/broker/{topic}"), value));
 
-        add("version", format!("PulseMQ {}", self.version));
+        add("version", format!("WispMQ {}", self.version));
         add("uptime", format!("{} seconds", self.uptime_seconds));
 
         add("clients/connected", self.clients_connected.to_string());
@@ -607,17 +607,17 @@ impl Snapshot {
     /// see every sensor immediately rather than waiting for the next
     /// `sys_interval` tick.
     ///
-    /// `node_id` scopes both the topic and `unique_id`, so multiple PulseMQ
+    /// `node_id` scopes both the topic and `unique_id`, so multiple WispMQ
     /// instances publishing into the same broker with distinct
     /// `service_name`s do not collide or overwrite each other's entities.
     /// Each `state_topic` points at [`Snapshot::to_ha_states`]'s output for
     /// the same series name, and both are built from the same `series()`
     /// call, so they cannot disagree.
     pub fn to_ha_discovery(&self, prefix: &str, node_id: &str) -> Vec<(String, String)> {
-        let device_name = if node_id == "pulsemq" {
-            "PulseMQ".to_string()
+        let device_name = if node_id == "wispmq" {
+            "WispMQ".to_string()
         } else {
-            format!("PulseMQ ({node_id})")
+            format!("WispMQ ({node_id})")
         };
         self.series()
             .into_iter()
@@ -626,17 +626,17 @@ impl Snapshot {
                 let topic = format!("{prefix}/sensor/{node_id}/{object_id}/config");
                 let payload = serde_json::json!({
                     "name": friendly_series_name(object_id),
-                    "unique_id": format!("pulsemq_{node_id}_{object_id}"),
+                    "unique_id": format!("wispmq_{node_id}_{object_id}"),
                     "state_topic": ha_state_topic(node_id, object_id),
                     "state_class": match s.kind {
                         SeriesKind::Counter => "total_increasing",
                         SeriesKind::Gauge => "measurement",
                     },
                     "device": {
-                        "identifiers": [format!("pulsemq_{node_id}")],
+                        "identifiers": [format!("wispmq_{node_id}")],
                         "name": device_name,
                         "manufacturer": "elpapimango",
-                        "model": "pulsemq",
+                        "model": "wispmq",
                         "sw_version": self.version,
                     },
                 })
@@ -658,7 +658,7 @@ impl Snapshot {
 
 /// The MQTT state topic one series' Home Assistant sensor reads from.
 fn ha_state_topic(node_id: &str, object_id: &str) -> String {
-    format!("pulsemq/{node_id}/{object_id}")
+    format!("wispmq/{node_id}/{object_id}")
 }
 
 /// A human-readable Home Assistant entity name from a Prometheus series name,
@@ -799,8 +799,8 @@ mod tests {
         // so an HA discovery config's `state_topic` always resolves to a topic
         // `to_ha_states` actually publishes.
         let snap = distinct();
-        let discovery = snap.to_ha_discovery("homeassistant", "pulsemq");
-        let states = snap.to_ha_states("pulsemq");
+        let discovery = snap.to_ha_discovery("homeassistant", "wispmq");
+        let states = snap.to_ha_states("wispmq");
         assert_eq!(discovery.len(), states.len());
         assert_eq!(discovery.len(), snap.series().len());
 
@@ -808,7 +808,7 @@ mod tests {
             states.iter().map(|(t, _)| t.as_str()).collect();
         for (config_topic, payload) in &discovery {
             assert!(
-                config_topic.starts_with("homeassistant/sensor/pulsemq/"),
+                config_topic.starts_with("homeassistant/sensor/wispmq/"),
                 "{config_topic}"
             );
             assert!(config_topic.ends_with("/config"), "{config_topic}");
@@ -818,8 +818,8 @@ mod tests {
                 state_topics.contains(state_topic),
                 "discovery config points at a topic to_ha_states never publishes: {state_topic}"
             );
-            assert!(v["unique_id"].as_str().unwrap().starts_with("pulsemq_"));
-            assert_eq!(v["device"]["identifiers"][0], "pulsemq_pulsemq");
+            assert!(v["unique_id"].as_str().unwrap().starts_with("wispmq_"));
+            assert_eq!(v["device"]["identifiers"][0], "wispmq_wispmq");
         }
     }
 
@@ -827,7 +827,7 @@ mod tests {
     fn ha_discovery_state_class_matches_series_kind() {
         let snap = distinct();
         let series = snap.series();
-        let discovery = snap.to_ha_discovery("homeassistant", "pulsemq");
+        let discovery = snap.to_ha_discovery("homeassistant", "wispmq");
         for (s, (_, payload)) in series.iter().zip(discovery.iter()) {
             let v: serde_json::Value = serde_json::from_str(payload).unwrap();
             let expected = match s.kind {
@@ -840,18 +840,18 @@ mod tests {
 
     #[test]
     fn ha_discovery_node_id_scopes_device_and_avoids_default_name_suffix() {
-        // The default service_name ("pulsemq") gets a plain device name;
+        // The default service_name ("wispmq") gets a plain device name;
         // anything else gets it appended so multiple instances are
         // distinguishable on the same Home Assistant dashboard.
         let snap = distinct();
-        let default_node = snap.to_ha_discovery("homeassistant", "pulsemq");
+        let default_node = snap.to_ha_discovery("homeassistant", "wispmq");
         let v: serde_json::Value = serde_json::from_str(&default_node[0].1).unwrap();
-        assert_eq!(v["device"]["name"], "PulseMQ");
+        assert_eq!(v["device"]["name"], "WispMQ");
 
         let scoped = snap.to_ha_discovery("homeassistant", "edge-1");
         let v: serde_json::Value = serde_json::from_str(&scoped[0].1).unwrap();
-        assert_eq!(v["device"]["name"], "PulseMQ (edge-1)");
-        assert_eq!(v["device"]["identifiers"][0], "pulsemq_edge-1");
+        assert_eq!(v["device"]["name"], "WispMQ (edge-1)");
+        assert_eq!(v["device"]["identifiers"][0], "wispmq_edge-1");
         assert!(scoped[0].0.starts_with("homeassistant/sensor/edge-1/"));
     }
 }

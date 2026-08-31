@@ -18,14 +18,14 @@ use std::time::{Duration, Instant};
 
 use tokio::net::TcpStream;
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::framing::{read_packet, write_packet, ReadOutcome};
+use wispmq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
 mod common;
 use common::free_addr;
@@ -44,7 +44,7 @@ fn start_broker(addr: SocketAddr) -> Broker {
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(b).await;
+        let _ = wispmq::server::run(b).await;
     });
     broker
 }
@@ -179,7 +179,7 @@ fn fanout_throughput() {
                             qos: QoS::AtMostOnce,
                             no_local: false,
                             retain_as_published: false,
-                            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+                            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
                         }],
                     });
                     write_packet(&mut s, &sub, V5).await.unwrap();

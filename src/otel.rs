@@ -81,7 +81,7 @@ mod imp {
     use crate::metrics::SeriesKind;
 
     /// Records queued for export before the processor starts dropping. At
-    /// PulseMQ's log volume this is minutes of buffer, and dropping beats
+    /// WispMQ's log volume this is minutes of buffer, and dropping beats
     /// letting an unreachable collector grow the heap on a 512 MB box.
     const LOG_QUEUE_SIZE: usize = 2048;
 
@@ -113,8 +113,8 @@ mod imp {
         // format!("{t}::"))`: strip the candidate prefix, then check what's
         // left is either nothing (exact match) or starts with the `::`
         // module separator (a submodule) — not just any string that happens
-        // to start with the same letters (e.g. `pulsemq::broker` must not
-        // match a hypothetical `pulsemq` candidate the way `pulsemqx` would
+        // to start with the same letters (e.g. `wispmq::broker` must not
+        // match a hypothetical `wispmq` candidate the way `wispmqx` would
         // with a bare `starts_with(t)`).
         EXPORTER_TARGETS.iter().any(|t| {
             target
@@ -269,7 +269,7 @@ mod imp {
             .with_reader(reader)
             .with_resource(resource(cfg))
             .build();
-        let meter = provider.meter("pulsemq");
+        let meter = provider.meter("wispmq");
 
         // One instrument per series, each reading its own slot of the shared
         // per-cycle snapshot. The index is the position in `series()`, which is
@@ -359,7 +359,7 @@ mod imp {
             assert!(is_exporter_target("hyper_util::client::pool"));
             // Broker logs must still be exported — including modules whose name
             // merely starts with the same letters.
-            assert!(!is_exporter_target("pulsemq::broker"));
+            assert!(!is_exporter_target("wispmq::broker"));
             assert!(!is_exporter_target("h2o"));
             assert!(!is_exporter_target("rustls_pemfile"));
         }

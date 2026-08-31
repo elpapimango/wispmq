@@ -1,6 +1,6 @@
 # TODO / Roadmap
 
-Work items for PulseMQ, most important first. This file is meant to be picked up
+Work items for WispMQ, most important first. This file is meant to be picked up
 by a fresh Claude session — see `CLAUDE.md` for architecture, conventions, and
 the "wire a config option everywhere" checklist. Keep every change green under
 `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D
@@ -73,11 +73,11 @@ Implemented in `src/bridge.rs` (+ `broker` internal API, `tls::client_config`,
 `ws::client`, config `bridges:` list, `tests/bridge.rs`, README/example). All
 acceptance criteria below are met: bidirectional forwarding over tcp/tls/ws/wss,
 reconnect+backoff, loop prevention via `no_local`, QoS 0/1/2, bridge metrics.
-Verified with two in-process brokers (integration test) and two live PulseMQ
+Verified with two in-process brokers (integration test) and two live WispMQ
 instances via mosquitto. The original design notes are kept below for reference.
 
-Let PulseMQ **forward** messages to/from one or more remote MQTT brokers, the
-way a mosquitto "bridge" does — so PulseMQ can aggregate edge brokers up to a
+Let WispMQ **forward** messages to/from one or more remote MQTT brokers, the
+way a mosquitto "bridge" does — so WispMQ can aggregate edge brokers up to a
 central one, or fan a central broker's topics down to the edge.
 
 ### Scope / design
@@ -109,7 +109,7 @@ the list; document that bridges are config-file-only if that's simpler):
 bridges:
   - name: central
     address: "tls://central.example:8883"   # tcp:// | tls:// | ws:// | wss://
-    client_id: "pulsemq-edge-1"
+    client_id: "wispmq-edge-1"
     username: "..."            # optional
     password: "..."            # optional
     tls_ca: "certs/ca.pem"     # optional (for tls/wss)
@@ -122,7 +122,7 @@ bridges:
 ```
 
 ### Acceptance criteria
-- [ ] Two PulseMQ instances bridged together: publishing to a bridged "out"
+- [ ] Two WispMQ instances bridged together: publishing to a bridged "out"
       topic on A is received by a subscriber on B, and vice-versa for "in".
 - [ ] Survives the remote going away and coming back (reconnect with backoff).
 - [ ] No message loops between mutually bridged brokers.
@@ -131,7 +131,7 @@ bridges:
       ports, bridge them, assert delivery) + reconnect test.
 - [ ] Add bridge metrics (see item 2): messages forwarded in/out, bridge
       connection state/up, reconnect count.
-- [ ] Docs: README "Forwarding / bridging" section + `pulsemq.example.yaml`.
+- [ ] Docs: README "Forwarding / bridging" section + `wispmq.example.yaml`.
 
 ---
 
@@ -256,7 +256,7 @@ the `load/*` topics are mainly for $SYS parity.
       under load; `broker_stats` MCP tool reflects them.
 - [ ] Per-control-packet received/sent counters are correct (unit/integration
       test), and the `$SYS`↔Prometheus values agree.
-- [ ] README metrics + $SYS sections and `pulsemq.example.yaml` updated.
+- [ ] README metrics + $SYS sections and `wispmq.example.yaml` updated.
 
 ---
 
@@ -264,12 +264,12 @@ the `load/*` topics are mainly for $SYS parity.
 
 Implemented: `config.rs` parses with `serde_json` (`apply_json_str`/
 `apply_json_file`, `KNOWN_KEYS`), `bridge::parse_bridges` takes a
-`&serde_json::Value`, the default file is `pulsemq.json`, `yaml-rust2` is gone,
-and the example is `pulsemq.example.json` (a minimal, copy-paste-valid file).
+`&serde_json::Value`, the default file is `wispmq.json`, `yaml-rust2` is gone,
+and the example is `wispmq.example.json` (a minimal, copy-paste-valid file).
 Per the caveat below we kept **strict JSON** and moved per-option docs to the
 README; a `#`/`//` comment is now a startup error rather than being silently
 ignored, which is covered by a test so anyone porting a commented
-`pulsemq.yaml` is told plainly. Original notes follow.
+`wispmq.yaml` is told plainly. Original notes follow.
 
 Replace the YAML config file with **JSON**. Rationale: one config format across
 the project (the ACL policy is already JSON), `serde_json` is already a
@@ -283,11 +283,11 @@ dependency, and it lets us drop `yaml-rust2`.
   **defaults < config file < env < CLI**.
 - **Bridges** (`bridge.rs`): change `parse_bridges(&Yaml, …)` to take a
   `&serde_json::Value`; update the `bridges` array + `topics` parsing.
-- **Discovery / naming**: default files become `pulsemq.json` (drop
-  `pulsemq.yaml`/`.yml`); `--config` / `MQTT_CONFIG_FILE` still point anywhere.
+- **Discovery / naming**: default files become `wispmq.json` (drop
+  `wispmq.yaml`/`.yml`); `--config` / `MQTT_CONFIG_FILE` still point anywhere.
   Update `DEFAULT_CONFIG_FILES` and the `--help`/README wording.
-- **Example + ignore**: rename `pulsemq.example.yaml` → `pulsemq.example.json`;
-  update `.gitignore` (`pulsemq.yaml`/`.yml` → `pulsemq.json`) and `.dockerignore`.
+- **Example + ignore**: rename `wispmq.example.yaml` → `wispmq.example.json`;
+  update `.gitignore` (`wispmq.yaml`/`.yml` → `wispmq.json`) and `.dockerignore`.
 - **Dependency**: remove `yaml-rust2` from `Cargo.toml` once nothing imports it.
 - **Docs**: README "Configuration" section + the config table, `CLAUDE.md`
   (default file name, the "wire an option everywhere" checklist), and any
@@ -299,7 +299,7 @@ dependency, and it lets us drop `yaml-rust2`.
 ### Caveat — comments
 JSON has no comments, so the current heavily-commented example can't carry inline
 docs. Options (pick one, note it in the PR):
-- Ship a plain `pulsemq.example.json` and move the field docs to the README
+- Ship a plain `wispmq.example.json` and move the field docs to the README
   (recommended — the README already documents every option), **or**
 - Accept JSONC/JSON5 (a `//`-comment-tolerant parser) so the example can stay
   annotated — heavier, adds a dep; probably not worth it.
@@ -307,13 +307,13 @@ docs. Options (pick one, note it in the PR):
 Keep it strict JSON unless there's a strong reason otherwise.
 
 ### Acceptance criteria
-- [ ] `pulsemq.json` (auto-discovered) and `--config file.json` load correctly;
+- [ ] `wispmq.json` (auto-discovered) and `--config file.json` load correctly;
       precedence file < env < CLI holds (live check + unit tests).
 - [ ] Unknown keys and wrong types are rejected with a clear message.
 - [ ] Bridges parse from JSON; the bridge integration test still passes.
 - [ ] `yaml-rust2` removed; `cargo fmt`/`clippy -D warnings`/`test` all green.
 - [ ] README, CLAUDE.md, example file, and ignore files updated; no lingering
-      references to `pulsemq.yaml` / YAML config.
+      references to `wispmq.yaml` / YAML config.
 
 ---
 
@@ -372,7 +372,7 @@ support, and less bespoke string-matching to maintain.
   precedence order stays intact (or verify clap's `.env()` yields identical
   ordering before adopting it).
 - Fold the `--hash-password <USER>` and any other one-shot commands into a clap
-  **subcommand** (e.g. `pulsemq hash-password <user>`) or an `Option<String>`
+  **subcommand** (e.g. `wispmq hash-password <user>`) or an `Option<String>`
   flag — match current behavior (reads password from stdin, prints the line).
 - Drop the `HELP` constant; let clap generate help/usage. Wire `--version` from
   `CARGO_PKG_VERSION`.
@@ -393,7 +393,7 @@ support, and less bespoke string-matching to maintain.
 - [x] Precedence defaults < file < env < CLI is unchanged (unit tests prove CLI
       wins over env which wins over file — `cli_beats_env_beats_file`).
 - [x] `hash-password` still works (verified live, including with a malformed
-      `pulsemq.json` present, which must not block it).
+      `wispmq.json` present, which must not block it).
 - [x] `cargo fmt`/`clippy -D warnings`/`test` green (54 tests at the time; the
       suite has grown since); README + CLAUDE.md updated.
 
@@ -609,7 +609,7 @@ socket, so the wire path is covered rather than just the type-checking.
 - [x] No secrets in exported logs (`Secret` + the redacting `Debug`, with a
       test asserting the value never appears in `{cfg:?}`).
 - [x] Config wired through every layer with tests, README "OTLP telemetry
-      export" section, `pulsemq.example.json`, a CI job for the feature build,
+      export" section, `wispmq.example.json`, a CI job for the feature build,
       and a `FEATURES` build-arg on the Dockerfile.
 
 ### Not done, on purpose
@@ -622,7 +622,7 @@ socket, so the wire path is covered rather than just the type-checking.
 
 Original notes follow.
 
-Let PulseMQ push its **logs** and **metrics** to an external observability
+Let WispMQ push its **logs** and **metrics** to an external observability
 backend, instead of only being scraped on `/metrics`. Useful for edge/Pi
 deployments where nothing is scraping the box.
 
@@ -827,13 +827,13 @@ have acceptance criteria yet; scope one out before starting it.
       bounds — a rate cap has a real false-positive risk (a fleet of devices
       behind one NAT gateway shares a source IP), so it's opt-in via
       `max_connections_per_ip` / `connection_rate_window_secs`, full config
-      checklist wired (env/CLI/JSON/README/`pulsemq.example.json`). A
+      checklist wired (env/CLI/JSON/README/`wispmq.example.json`). A
       periodic sweep (mirrors `sysinfo::run`'s shape) evicts stale per-IP
       entries so the tracking map doesn't grow unbounded.
 - [ ] **SQLite backup/restore + WAL tuning** — no documented backup story for
       `/data/*.db`; WAL checkpoint behavior under high write rate untested.
 - [ ] **v5 Enhanced Authentication (AUTH packet, SCRAM)** — spec supports it,
-      PulseMQ only does username/password. Confirm a real need before building.
+      WispMQ only does username/password. Confirm a real need before building.
 - [ ] **Structured audit log for auth/ACL events** — separate from general
       `tracing` output: connect/disconnect, ACL denials, admin actions, for
       compliance/forensics.
@@ -889,7 +889,7 @@ list it originally shipped with, hand-written rather than
 `--generate-notes` because auto-generated notes are a commit list that buries
 the part that actually matters to someone upgrading:
 
-- the config file is JSON, not YAML (item 3) — a `pulsemq.yaml` no longer loads;
+- the config file is JSON, not YAML (item 3) — a `wispmq.yaml` no longer loads;
 - `config::Startup` lost `Exit` and gained `HashPassword`, and `config::HELP` is
   gone (item 4) — library-only, but a source break;
 - the per-control-packet metrics are `mqtt_packet_<packet>_*` (item 2's note) —

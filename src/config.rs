@@ -65,7 +65,7 @@ const KNOWN_KEYS: &[&str] = &[
 ];
 
 /// Default config-file names looked for in the working directory.
-const DEFAULT_CONFIG_FILES: &[&str] = &["pulsemq.toml"];
+const DEFAULT_CONFIG_FILES: &[&str] = &["wispmq.toml"];
 
 /// Crate version, surfaced by `--version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -336,7 +336,7 @@ impl Default for Config {
             otlp_interval: 60,
             otlp_metrics: true,
             otlp_logs: true,
-            service_name: "pulsemq".to_string(),
+            service_name: "wispmq".to_string(),
             ha_discovery: false,
             ha_discovery_prefix: "homeassistant".to_string(),
             config_file: None,
@@ -531,7 +531,7 @@ impl Config {
     /// from [`Config::load`] so it does not depend on the process's argv.
     fn from_cli(cli: Cli) -> Result<Startup> {
         // `--hash-password` is a one-shot helper: answer it before reading the
-        // config file, so a broken pulsemq.toml cannot block hashing a password.
+        // config file, so a broken wispmq.toml cannot block hashing a password.
         if let Some(user) = cli.hash_password {
             return Ok(Startup::HashPassword(user));
         }
@@ -992,7 +992,7 @@ connection_rate_window_secs = 5
         assert!(cfg.otlp_headers.is_empty());
         assert_eq!(cfg.otlp_protocol, "http");
         assert_eq!(cfg.otlp_interval, 60);
-        assert_eq!(cfg.service_name, "pulsemq");
+        assert_eq!(cfg.service_name, "wispmq");
         assert!(cfg.otlp_metrics && cfg.otlp_logs);
     }
 

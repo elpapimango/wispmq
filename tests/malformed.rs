@@ -13,9 +13,9 @@
 //! decoder branches than uniform noise, which almost always dies on the first
 //! length check.
 
-use pulsemq::codec::Properties;
-use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use pulsemq::types::{
+use wispmq::codec::Properties;
+use wispmq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use wispmq::types::{
     ProtocolVersion::{self, V3_1, V3_1_1, V5},
     QoS,
 };
@@ -61,7 +61,7 @@ fn seeds() -> Vec<Vec<u8>> {
             qos: QoS::ExactlyOnce,
             no_local: true,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
 

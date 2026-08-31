@@ -10,14 +10,14 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::framing::{read_packet, write_packet, ReadOutcome};
+use wispmq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{PacketType, ProtocolVersion::V5, QoS, ReasonCode};
 
 mod common;
 use common::free_addr;
@@ -37,7 +37,7 @@ fn make_broker(addr: SocketAddr, sys_interval: u32) -> Broker {
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(b).await;
+        let _ = wispmq::server::run(b).await;
     });
     broker
 }
@@ -74,7 +74,7 @@ async fn subscribe(s: &mut TcpStream, filter: &str) {
             qos: QoS::AtMostOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(s, &sub, V5).await.unwrap();
@@ -105,7 +105,7 @@ async fn collect(s: &mut TcpStream, window: Duration) -> HashMap<String, String>
 async fn sys_topics_are_published_and_retained() {
     let addr = free_addr();
     let broker = make_broker(addr, 1);
-    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    tokio::spawn(wispmq::sysinfo::run(broker.clone()));
     sleep(Duration::from_millis(200)).await;
 
     let mut c = connect(addr, "sys-reader").await;
@@ -129,7 +129,7 @@ async fn sys_topics_are_published_and_retained() {
         "expected $SYS/broker/version, got {:?}",
         topics.keys().collect::<Vec<_>>()
     );
-    assert!(topics["$SYS/broker/version"].starts_with("PulseMQ "));
+    assert!(topics["$SYS/broker/version"].starts_with("WispMQ "));
     assert!(topics.contains_key("$SYS/broker/clients/connected"));
     assert!(topics.contains_key("$SYS/broker/messages/received"));
     assert!(topics.contains_key("$SYS/broker/mqtt/publish/received"));
@@ -145,7 +145,7 @@ async fn sys_topics_are_published_and_retained() {
 async fn sys_interval_zero_disables_publishing() {
     let addr = free_addr();
     let broker = make_broker(addr, 0);
-    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    tokio::spawn(wispmq::sysinfo::run(broker.clone()));
     sleep(Duration::from_millis(300)).await;
 
     let mut c = connect(addr, "sys-off").await;
@@ -164,7 +164,7 @@ async fn wildcard_subscribers_do_not_receive_sys_topics() {
     // subscriber must not be flooded with broker statistics.
     let addr = free_addr();
     let broker = make_broker(addr, 1);
-    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    tokio::spawn(wispmq::sysinfo::run(broker.clone()));
     sleep(Duration::from_millis(200)).await;
 
     let mut c = connect(addr, "hash-sub").await;
@@ -218,7 +218,7 @@ async fn sys_topics_do_not_inflate_the_retained_gauge() {
     // gauge and breaks whatever was alerting on it.
     let addr = free_addr();
     let broker = make_broker(addr, 1);
-    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    tokio::spawn(wispmq::sysinfo::run(broker.clone()));
     sleep(Duration::from_millis(400)).await;
 
     // No user retained messages yet, despite many $SYS topics being live.
@@ -283,9 +283,9 @@ async fn ha_discovery_topics_do_not_inflate_the_retained_gauge() {
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(b).await;
+        let _ = wispmq::server::run(b).await;
     });
-    tokio::spawn(pulsemq::sysinfo::run(broker.clone()));
+    tokio::spawn(wispmq::sysinfo::run(broker.clone()));
     sleep(Duration::from_millis(400)).await;
 
     let snap = broker.snapshot();

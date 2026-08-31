@@ -7,14 +7,14 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::sleep;
 
-use pulsemq::acl::Acl;
-use pulsemq::broker::Broker;
-use pulsemq::codec::Properties;
-use pulsemq::config::Config;
-use pulsemq::framing::{read_packet, write_packet, ReadOutcome};
-use pulsemq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
-use pulsemq::storage::Storage;
-use pulsemq::types::{ProtocolVersion::V5, QoS, ReasonCode};
+use wispmq::acl::Acl;
+use wispmq::broker::Broker;
+use wispmq::codec::Properties;
+use wispmq::config::Config;
+use wispmq::framing::{read_packet, write_packet, ReadOutcome};
+use wispmq::packet::{Connect, Packet, Publish, Subscribe, TopicFilter};
+use wispmq::storage::Storage;
+use wispmq::types::{ProtocolVersion::V5, QoS, ReasonCode};
 
 mod common;
 use common::free_addr;
@@ -34,7 +34,7 @@ fn make_broker(addr: SocketAddr, max_queued: u32) -> Broker {
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(b).await;
+        let _ = wispmq::server::run(b).await;
     });
     broker
 }
@@ -55,7 +55,7 @@ fn make_rate_limited_broker(addr: SocketAddr, max_per_ip: u32, window_secs: u32)
     );
     let b = broker.clone();
     tokio::spawn(async move {
-        let _ = pulsemq::server::run(b).await;
+        let _ = wispmq::server::run(b).await;
     });
     broker
 }
@@ -119,7 +119,7 @@ async fn subscribe_qos1(s: &mut TcpStream, filter: &str) {
             qos: QoS::AtLeastOnce,
             no_local: false,
             retain_as_published: false,
-            retain_handling: pulsemq::packet::RetainHandling::SendAtSubscribe,
+            retain_handling: wispmq::packet::RetainHandling::SendAtSubscribe,
         }],
     });
     write_packet(s, &sub, V5).await.unwrap();
