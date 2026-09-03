@@ -57,25 +57,37 @@ pub(crate) struct Cli {
     #[arg(long, value_name = "SECS", help_heading = "Network")]
     pub connection_rate_window_secs: Option<u32>,
 
-    /// PEM certificate chain for the MQTT port [MQTT_TLS_CERT]
+    /// Bind a second, dedicated MQTT listener that always speaks TLS,
+    /// independent of and simultaneous with --listen-addr (always plain)
+    /// [MQTT_TLS_LISTEN_ADDR]. Requires --tls-cert/--tls-key.
+    #[arg(long, value_name = "ADDR", help_heading = "MQTT TLS")]
+    pub tls_listen_addr: Option<SocketAddr>,
+
+    /// PEM certificate chain for the MQTT TLS port [MQTT_TLS_CERT]
     #[arg(long, value_name = "FILE", help_heading = "MQTT TLS")]
     pub tls_cert: Option<String>,
 
-    /// PEM private key for the MQTT port [MQTT_TLS_KEY]
+    /// PEM private key for the MQTT TLS port [MQTT_TLS_KEY]
     #[arg(long, value_name = "FILE", help_heading = "MQTT TLS")]
     pub tls_key: Option<String>,
 
-    /// PEM CA bundle; enables mutual TLS on the MQTT port (clients must present
-    /// a trusted cert) [MQTT_TLS_CLIENT_CA]
+    /// PEM CA bundle; enables mutual TLS on the MQTT TLS port (clients must
+    /// present a trusted cert) [MQTT_TLS_CLIENT_CA]
     #[arg(long, value_name = "FILE", help_heading = "MQTT TLS")]
     pub tls_client_ca: Option<String>,
 
-    /// Enable the WebSocket listener on this address (subprotocol "mqtt")
-    /// [MQTT_WS_LISTEN_ADDR]
+    /// Enable the WebSocket listener on this address (subprotocol "mqtt"),
+    /// always plain [MQTT_WS_LISTEN_ADDR]
     #[arg(long, value_name = "ADDR", help_heading = "MQTT over WebSockets")]
     pub ws_listen_addr: Option<SocketAddr>,
 
-    /// PEM certificate chain for the WS port (wss://) [MQTT_WS_TLS_CERT]
+    /// Bind a second, dedicated WebSocket listener that always speaks TLS
+    /// (wss://), independent of and simultaneous with --ws-listen-addr
+    /// [MQTT_WS_TLS_LISTEN_ADDR]. Requires --ws-tls-cert/--ws-tls-key.
+    #[arg(long, value_name = "ADDR", help_heading = "MQTT over WebSockets")]
+    pub ws_tls_listen_addr: Option<SocketAddr>,
+
+    /// PEM certificate chain for the WS TLS port (wss://) [MQTT_WS_TLS_CERT]
     #[arg(long, value_name = "FILE", help_heading = "MQTT over WebSockets")]
     pub ws_tls_cert: Option<String>,
 
@@ -316,11 +328,17 @@ impl Cli {
         if let Some(v) = &self.admin_token {
             cfg.admin_token = Some(Secret::new(v.clone()));
         }
+        if let Some(v) = self.tls_listen_addr {
+            cfg.tls_listen_addr = Some(v);
+        }
         overlay(&mut cfg.tls_cert, &self.tls_cert);
         overlay(&mut cfg.tls_key, &self.tls_key);
         overlay(&mut cfg.tls_client_ca, &self.tls_client_ca);
         if let Some(v) = self.ws_listen_addr {
             cfg.ws_listen_addr = Some(v);
+        }
+        if let Some(v) = self.ws_tls_listen_addr {
+            cfg.ws_tls_listen_addr = Some(v);
         }
         overlay(&mut cfg.ws_tls_cert, &self.ws_tls_cert);
         overlay(&mut cfg.ws_tls_key, &self.ws_tls_key);
@@ -468,18 +486,30 @@ mod tests {
             "127.0.0.1:1",
             "--receive-maximum",
             "10",
+            "--tls-listen-addr",
+            "127.0.0.1:2",
             "--tls-cert",
             "c.pem",
             "--tls-key",
             "k.pem",
             "--tls-client-ca",
             "ca.pem",
+            "--ws-tls-listen-addr",
+            "127.0.0.1:3",
         ]);
         assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1");
         assert_eq!(cfg.receive_maximum, 10);
+        assert_eq!(
+            cfg.tls_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("127.0.0.1:2")
+        );
         assert_eq!(cfg.tls_cert.as_deref(), Some("c.pem"));
         assert_eq!(cfg.tls_key.as_deref(), Some("k.pem"));
         assert_eq!(cfg.tls_client_ca.as_deref(), Some("ca.pem"));
+        assert_eq!(
+            cfg.ws_tls_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("127.0.0.1:3")
+        );
     }
 
     #[test]

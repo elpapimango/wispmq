@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use tokio_rustls::TlsAcceptor;
 
 use crate::broker::{Action, Broker, Outgoing};
 use crate::error::{MqttError, Result};
@@ -40,17 +41,19 @@ async fn send<W: AsyncWrite + Unpin>(
 /// Time allowed to receive the initial CONNECT before dropping the socket.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Bind and serve until the process is stopped.
-pub async fn run(broker: Broker) -> Result<()> {
-    let addr = broker.config().listen_addr;
-    let cfg = broker.config();
-    let acceptor =
-        crate::tls::maybe_acceptor(&cfg.tls_cert, &cfg.tls_key, &cfg.tls_client_ca, "mqtt")?;
-    let mode = match (acceptor.is_some(), cfg.tls_client_ca.is_some()) {
-        (true, true) => " (TLS, mutual: client certificate required)",
-        (true, false) => " (TLS)",
-        _ => "",
-    };
+/// Bind a raw-TCP MQTT listener — plain if `acceptor` is `None`, TLS (or
+/// mutual TLS, per what `acceptor` was built with) otherwise — and serve it
+/// until the process is stopped. `mode` is purely a log-line suffix.
+///
+/// Shared by [`run`] (always `None`) and [`run_tls`] (always `Some`), which
+/// are otherwise identical, so a plain and a TLS MQTT listener can run at
+/// the same time on independent addresses.
+async fn serve_mqtt(
+    broker: Broker,
+    addr: SocketAddr,
+    acceptor: Option<TlsAcceptor>,
+    mode: &'static str,
+) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("MQTT v5.0 broker listening on {addr}{mode}");
 
@@ -89,25 +92,51 @@ pub async fn run(broker: Broker) -> Result<()> {
     }
 }
 
-/// Bind and serve MQTT over WebSockets until the process is stopped. Requires
-/// `config.ws_listen_addr` to be set.
-pub async fn run_ws(broker: Broker) -> Result<()> {
+/// Bind and serve the plain MQTT listener (`config.listen_addr`, always set)
+/// until the process is stopped.
+pub async fn run(broker: Broker) -> Result<()> {
+    let addr = broker.config().listen_addr;
+    serve_mqtt(broker, addr, None, "").await
+}
+
+/// Bind and serve the dedicated TLS MQTT listener, independent of and
+/// simultaneous with [`run`]. Requires `config.tls_listen_addr` to be set;
+/// a no-op (`Ok(())`) otherwise, same as [`run_ws`] when unconfigured.
+pub async fn run_tls(broker: Broker) -> Result<()> {
     let cfg = broker.config();
-    let Some(addr) = cfg.ws_listen_addr else {
+    let Some(addr) = cfg.tls_listen_addr else {
         return Ok(());
     };
-    let acceptor = crate::tls::maybe_acceptor(
-        &cfg.ws_tls_cert,
-        &cfg.ws_tls_key,
-        &cfg.ws_tls_client_ca,
-        "websocket",
-    )?;
-    let mode = match (acceptor.is_some(), cfg.ws_tls_client_ca.is_some()) {
-        (true, true) => " (TLS, mutual: client certificate required)",
-        (true, false) => " (TLS)",
-        _ => "",
+    let acceptor =
+        crate::tls::maybe_acceptor(&cfg.tls_cert, &cfg.tls_key, &cfg.tls_client_ca, "mqtt-tls")?
+            .ok_or_else(|| {
+                MqttError::Config(
+                    "tls_listen_addr is set but tls_cert/tls_key are not — this should have \
+                     been rejected at startup"
+                        .to_string(),
+                )
+            })?;
+    let mode = if cfg.tls_client_ca.is_some() {
+        " (TLS, mutual: client certificate required)"
+    } else {
+        " (TLS)"
     };
-    let max_packet_size = cfg.max_packet_size;
+    serve_mqtt(broker, addr, Some(acceptor), mode).await
+}
+
+/// Bind a WebSocket MQTT listener — plain if `acceptor` is `None`, TLS (wss)
+/// otherwise — and serve it until the process is stopped.
+///
+/// Shared by [`run_ws`] (always `None`) and [`run_ws_tls`] (always `Some`),
+/// which are otherwise identical, so a plain and a TLS WebSocket listener
+/// can run at the same time on independent addresses.
+async fn serve_ws(
+    broker: Broker,
+    addr: SocketAddr,
+    acceptor: Option<TlsAcceptor>,
+    mode: &'static str,
+    max_packet_size: u32,
+) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("MQTT-over-WebSocket listening on {addr}{mode}");
 
@@ -155,6 +184,48 @@ pub async fn run_ws(broker: Broker) -> Result<()> {
             }
         });
     }
+}
+
+/// Bind and serve the plain MQTT-over-WebSocket listener until the process is
+/// stopped. Requires `config.ws_listen_addr` to be set; a no-op (`Ok(())`)
+/// otherwise.
+pub async fn run_ws(broker: Broker) -> Result<()> {
+    let cfg = broker.config();
+    let Some(addr) = cfg.ws_listen_addr else {
+        return Ok(());
+    };
+    let max_packet_size = cfg.max_packet_size;
+    serve_ws(broker, addr, None, "", max_packet_size).await
+}
+
+/// Bind and serve the dedicated TLS (wss) MQTT-over-WebSocket listener,
+/// independent of and simultaneous with [`run_ws`]. Requires
+/// `config.ws_tls_listen_addr` to be set; a no-op (`Ok(())`) otherwise.
+pub async fn run_ws_tls(broker: Broker) -> Result<()> {
+    let cfg = broker.config();
+    let Some(addr) = cfg.ws_tls_listen_addr else {
+        return Ok(());
+    };
+    let acceptor = crate::tls::maybe_acceptor(
+        &cfg.ws_tls_cert,
+        &cfg.ws_tls_key,
+        &cfg.ws_tls_client_ca,
+        "websocket-tls",
+    )?
+    .ok_or_else(|| {
+        MqttError::Config(
+            "ws_tls_listen_addr is set but ws_tls_cert/ws_tls_key are not — this should have \
+             been rejected at startup"
+                .to_string(),
+        )
+    })?;
+    let mode = if cfg.ws_tls_client_ca.is_some() {
+        " (TLS, mutual: client certificate required)"
+    } else {
+        " (TLS)"
+    };
+    let max_packet_size = cfg.max_packet_size;
+    serve_ws(broker, addr, Some(acceptor), mode, max_packet_size).await
 }
 
 async fn handle_connection<S>(

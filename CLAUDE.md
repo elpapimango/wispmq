@@ -54,15 +54,38 @@ bearer-token comparison timing leak, and path-traversal rejection (a `..`
 path component is refused) on `--acl-file`, `--password-file`, `--cert-file`,
 and `--key-file`. No breaking change — a **patch** bump.
 
-Current status: `Cargo.toml` on `main` has since moved to a **0.9.5
-waypoint** — **another breaking change**: the ACL policy file
+The **0.9.5 waypoint** — **another breaking change**: the ACL policy file
 (`--acl-file`) switched from JSON to TOML (`acl::Acl::from_toml_str`,
 `[[rules]]` array-of-tables replacing the JSON `"rules"` array; `from_value`
 itself is unchanged — it already operated on a generic `serde_json::Value`,
 the same pivot-through-JSON technique `Config::apply_toml_str` uses), closing
-the inconsistency the 0.9.3 note above flagged. CI (`ci.yml`) and image
-builds (`docker.yml`) are green on `main`. `git log` has the detail — this is
-the map. See "Done since 0.9.0" below for what else has landed since 0.9.2.
+the inconsistency the 0.9.3 note above flagged.
+
+Current status: `Cargo.toml` on `main` has since moved to a **0.9.6
+waypoint** — **another breaking change**: `listen_addr` and `ws_listen_addr`
+are now **always plain**. TLS on the MQTT port used to be "whichever of
+`tls_cert`/`tls_key` happen to be set wraps `listen_addr`"; that coupling is
+gone. TLS now lives on two new, independent, optional listener addresses —
+`tls_listen_addr` (MQTT) and `ws_tls_listen_addr` (WebSocket) — each
+requiring its own cert+key (checked once at startup, alongside
+`otlp_protocol`, in the new `Config::validate`) and each able to run at the
+same time as its plain sibling on a different address. `tls_client_ca`/
+`ws_tls_client_ca` (mutual TLS) now gate the dedicated TLS addresses, not the
+plain ones. Driven by a downstream need in the `wispmq-addon` repo: Home
+Assistant's Mosquitto add-on shows four *always-present* ports (Normal MQTT,
+MQTT over WebSocket, and TLS variants of both) because mosquitto always runs
+all four listeners — this waypoint gives WispMQ the same real capability
+instead of faking a 4-way choice with a single listener toggling modes.
+**Migration**: a deployment that set `tls_cert`/`tls_key` (or the `ws_*`
+equivalents) without the new `*_listen_addr` loses TLS on that port after
+upgrading — add the matching `tls_listen_addr`/`ws_tls_listen_addr` to keep
+it (same address as before is fine; the port just needs naming explicitly
+now). `server.rs`'s `run`/`run_ws` (always plain) gained siblings
+`run_tls`/`run_ws_tls` (always TLS, no-op if their address is unset), both
+built around new private `serve_mqtt`/`serve_ws` helpers so the accept-loop
+body isn't duplicated four times. CI (`ci.yml`) and image builds
+(`docker.yml`) are green on `main`. `git log` has the detail — this is the
+map. See "Done since 0.9.0" below for what else has landed since 0.9.2.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
@@ -285,12 +308,18 @@ before changing it.
   the broker sends it commands over a channel (never blocks the network path).
 - The ACL is `RwLock<Arc<Acl>>`, hot-reloaded on SIGHUP.
 
-### Transports (five modes)
+### Transports (four independent listeners)
 
-Plain TCP, TLS, mutual TLS (all on `--listen-addr`), plus WebSockets and
-WebSockets-over-TLS (on `--ws-listen-addr`). Both ports can run at once and share
-the session/routing core. Client-cert CN becomes the authenticated identity for
-ACLs on any TLS transport.
+Two protocol families (MQTT, WebSocket), each split into an always-plain
+address and a dedicated always-TLS address that can run at the same time:
+`--listen-addr` (plain) + `--tls-listen-addr` (TLS/mutual TLS, needs
+`--tls-cert`/`--tls-key`), and `--ws-listen-addr` (plain) +
+`--ws-tls-listen-addr` (TLS/mutual TLS, needs `--ws-tls-cert`/
+`--ws-tls-key`). All four addresses are independent — any subset can be
+configured, all at once if wanted (see `server::run`/`run_tls`/`run_ws`/
+`run_ws_tls`, built on the shared `serve_mqtt`/`serve_ws` accept loops).
+Client-cert CN becomes the authenticated identity for ACLs on either TLS
+transport.
 
 ### Metrics and `$SYS`
 
@@ -403,7 +432,7 @@ format.
 
 ## Tests
 
-103 tests on default features (109 with `--features otel`), plus five
+114 tests on default features (120 with `--features otel`), plus five
 `#[ignore]`d benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`,
 `config`, `auth`, `storage`, `metrics`, `otel`); integration suites are in
 `tests/`:
@@ -540,9 +569,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (103 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (114 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (109).
+  `cargo test --features otel` (120).
 
 ## Conventions
 

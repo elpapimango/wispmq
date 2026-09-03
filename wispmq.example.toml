@@ -4,6 +4,20 @@ admin_addr = "127.0.0.1:9001"
 max_connections_per_ip = 0
 connection_rate_window_secs = 10
 
+# Dedicated TLS listeners are independent of and simultaneous with the
+# always-plain listen_addr/ws_listen_addr above — uncomment to run e.g. a
+# plain port on 1883 and a TLS port on 8883 at once.
+# [mqtt_tls]
+# tls_listen_addr = "0.0.0.0:8883"
+# tls_cert = "certs/server.pem"
+# tls_key = "certs/server.key"
+
+# [websockets]
+# ws_listen_addr = "0.0.0.0:1884"
+# ws_tls_listen_addr = "0.0.0.0:8884"
+# ws_tls_cert = "certs/server.pem"
+# ws_tls_key = "certs/server.key"
+
 [storage]
 db_path = "mqtt_broker.db"
 max_packet_size = 1048576

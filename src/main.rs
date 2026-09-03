@@ -149,6 +149,27 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Dedicated TLS MQTT listener, if configured — independent of and
+    // simultaneous with the plain listener above.
+    if broker.config().tls_listen_addr.is_some() {
+        let tls_broker = broker.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::run_tls(tls_broker).await {
+                tracing::error!("TLS MQTT listener stopped: {e}");
+            }
+        });
+    }
+
+    // Dedicated TLS (wss) MQTT-over-WebSocket listener, if configured.
+    if broker.config().ws_tls_listen_addr.is_some() {
+        let ws_tls_broker = broker.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::run_ws_tls(ws_tls_broker).await {
+                tracing::error!("TLS WebSocket listener stopped: {e}");
+            }
+        });
+    }
+
     // Broker-to-broker forwarding bridges, if any are configured.
     for bridge_cfg in broker.config().bridges.clone() {
         tracing::info!(

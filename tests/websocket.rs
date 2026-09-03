@@ -118,6 +118,22 @@ async fn start_ws_broker_with_acl(config: Config, acl: Acl) -> Broker {
     broker
 }
 
+/// Same as [`start_ws_broker`], but for the dedicated TLS listener
+/// (`ws_tls_listen_addr`/`run_ws_tls`) rather than the plain one.
+async fn start_ws_tls_broker(config: Config) -> Broker {
+    start_ws_tls_broker_with_acl(config, Acl::permit_all()).await
+}
+
+async fn start_ws_tls_broker_with_acl(config: Config, acl: Acl) -> Broker {
+    let broker = Broker::new(config, Storage::null(), Default::default(), acl, None);
+    let b = broker.clone();
+    tokio::spawn(async move {
+        let _ = wispmq::server::run_ws_tls(b).await;
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    broker
+}
+
 /// Generate a CA plus a server certificate (SAN `localhost`) and a client
 /// certificate (CN = `client_cn`) signed by it, for mutual-TLS tests. Returns
 /// PEM file paths: `(ca, server_cert, server_key, client_cert, client_key)`.
@@ -336,12 +352,12 @@ async fn mqtt_over_websocket_with_tls() {
 
     let addr = free_addr();
     let config = Config {
-        ws_listen_addr: Some(addr),
+        ws_tls_listen_addr: Some(addr),
         ws_tls_cert: Some(cert_path.to_string_lossy().into_owned()),
         ws_tls_key: Some(key_path.to_string_lossy().into_owned()),
         ..Config::default()
     };
-    let _broker = start_ws_broker(config).await;
+    let _broker = start_ws_tls_broker(config).await;
 
     // Client TLS trusting exactly the generated certificate.
     let mut roots = tokio_rustls::rustls::RootCertStore::empty();
@@ -384,7 +400,7 @@ async fn mqtt_over_websocket_with_mutual_tls_enforces_acl_by_cert_cn() {
 
     let addr = free_addr();
     let config = Config {
-        ws_listen_addr: Some(addr),
+        ws_tls_listen_addr: Some(addr),
         ws_tls_cert: Some(server_cert_path.to_string_lossy().into_owned()),
         ws_tls_key: Some(server_key_path.to_string_lossy().into_owned()),
         ws_tls_client_ca: Some(ca_path.to_string_lossy().into_owned()),
@@ -399,7 +415,7 @@ async fn mqtt_over_websocket_with_mutual_tls_enforces_acl_by_cert_cn() {
         ]
     }))
     .unwrap();
-    let _broker = start_ws_broker_with_acl(config, acl).await;
+    let _broker = start_ws_tls_broker_with_acl(config, acl).await;
 
     let ca_path = ca_path.to_string_lossy().into_owned();
     let client_cert_path = client_cert_path.to_string_lossy().into_owned();
@@ -502,13 +518,13 @@ async fn mqtt_over_websocket_without_client_cert_is_rejected_by_mutual_tls() {
 
     let addr = free_addr();
     let config = Config {
-        ws_listen_addr: Some(addr),
+        ws_tls_listen_addr: Some(addr),
         ws_tls_cert: Some(server_cert_path.to_string_lossy().into_owned()),
         ws_tls_key: Some(server_key_path.to_string_lossy().into_owned()),
         ws_tls_client_ca: Some(ca_path.to_string_lossy().into_owned()),
         ..Config::default()
     };
-    let _broker = start_ws_broker(config).await;
+    let _broker = start_ws_tls_broker(config).await;
 
     // Trusts the CA (so the server cert verifies) but presents no client
     // certificate — the server requires one. TLS 1.3's client-side `connect`

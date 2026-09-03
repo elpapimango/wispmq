@@ -62,8 +62,9 @@ Implements the full MQTT v5.0 control-packet set and the core broker behaviour:
 - **Admin HTTP server** on a separate port with a **health check**, a
   **Prometheus** metrics endpoint, and a **Model Context Protocol (MCP)** server
   exposing read-only broker-introspection tools.
-- **Transports**: plain TCP, TLS, mutual TLS, and **WebSockets** (plain and
-  over TLS), all sharing the same MQTT session/routing core.
+- **Transports**: independent plain TCP, TLS/mutual-TLS, plain **WebSocket**,
+  and TLS/mutual-TLS WebSocket listeners — up to four, all live at once,
+  sharing the same MQTT session/routing core.
 
 ## Architecture
 
@@ -170,12 +171,16 @@ max_connections_per_ip = 0
 connection_rate_window_secs = 10
 
 [mqtt_tls]
+tls_listen_addr = "0.0.0.0:8883"
 tls_cert = "certs/server.pem"
 tls_key = "certs/server.key"
 tls_client_ca = "certs/ca.pem"
 
 [websockets]
-ws_listen_addr = "0.0.0.0:8080"
+ws_listen_addr = "0.0.0.0:1884"
+ws_tls_listen_addr = "0.0.0.0:8884"
+ws_tls_cert = "certs/server.pem"
+ws_tls_key = "certs/server.key"
 
 [admin]
 admin_token = "change-me"
@@ -213,8 +218,12 @@ ha_discovery_prefix = "homeassistant"
 TOML supports `#` comments too, so annotate the file however you like; the
 table below is still the authoritative per-option reference.
 
-`tls_client_ca` enables mutual TLS; `ws_tls_cert`/`ws_tls_key` put the
-WebSocket listener behind TLS (`wss://`); `server_keep_alive` overrides the
+`tls_listen_addr` is a second, dedicated MQTT listener that always speaks TLS
+— independent of and simultaneous with the always-plain `listen_addr` — and
+needs `tls_cert`/`tls_key`; `tls_client_ca` on top of those enables mutual
+TLS. `ws_tls_listen_addr` is the WebSocket equivalent (`wss://`), independent
+of the always-plain `ws_listen_addr`, needing `ws_tls_cert`/`ws_tls_key`
+(plus `ws_tls_client_ca` for mutual TLS). `server_keep_alive` overrides the
 client's Keep Alive; the `otlp_*` keys turn on telemetry export and need a
 build with `--features otel` (see
 [OTLP telemetry export](#otlp-telemetry-export-push)); `ha_discovery` turns on
@@ -645,18 +654,23 @@ and routing core:
 
 | Mode | How to enable |
 |------|---------------|
-| Plain MQTT (TCP) | default (`--listen-addr`) |
-| MQTT over TLS | `--listen-addr` + `--tls-cert` + `--tls-key` |
+| Plain MQTT (TCP) | default (`--listen-addr`), always plain |
+| MQTT over TLS | `--tls-listen-addr` + `--tls-cert` + `--tls-key`, on its own address |
 | MQTT over TLS with client certificate (mTLS) | add `--tls-client-ca` |
-| MQTT over WebSockets | `--ws-listen-addr` |
-| MQTT over WebSockets with TLS (wss) | `--ws-listen-addr` + `--ws-tls-cert` + `--ws-tls-key` (add `--ws-tls-client-ca` for mTLS) |
+| MQTT over WebSockets | `--ws-listen-addr`, always plain |
+| MQTT over WebSockets with TLS (wss) | `--ws-tls-listen-addr` + `--ws-tls-cert` + `--ws-tls-key`, on its own address (add `--ws-tls-client-ca` for mTLS) |
 
-The raw-MQTT port and the WebSocket port are independent and can run at the same
-time. WebSocket connections carry MQTT Control Packets in binary frames and
+All four addresses are independent and can run at the same time — a plain
+MQTT port and a TLS MQTT port on different addresses, sharing the same
+certificate if you want, plus a plain and a TLS WebSocket port likewise. Each
+`*_tls_listen_addr` requires its matching cert + key; the plain address next
+to it (`listen_addr`/`ws_listen_addr`) never gets wrapped in TLS implicitly.
+WebSocket connections carry MQTT Control Packets in binary frames and
 negotiate the `mqtt` subprotocol (spec §6); packet boundaries need not align
 with frame boundaries. TLS termination and client-certificate identity (CN)
-work identically on both transports. Each transport accepts MQTT **v3.1, v3.1.1
-and v5** clients interchangeably (the version is negotiated per connection).
+work identically on both transports. Every transport accepts MQTT **v3.1,
+v3.1.1 and v5** clients interchangeably (the version is negotiated per
+connection).
 
 ```bash
 # Plain MQTT on 1883 and MQTT-over-WebSockets on 8080, together:

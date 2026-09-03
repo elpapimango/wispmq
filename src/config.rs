@@ -27,10 +27,12 @@ const KNOWN_KEYS: &[&str] = &[
     "listen_addr",
     "admin_addr",
     "admin_token",
+    "tls_listen_addr",
     "tls_cert",
     "tls_key",
     "tls_client_ca",
     "ws_listen_addr",
+    "ws_tls_listen_addr",
     "ws_tls_cert",
     "ws_tls_key",
     "ws_tls_client_ca",
@@ -215,22 +217,30 @@ pub struct Config {
     /// Optional bearer token required on the protected admin endpoints
     /// (`/metrics`, `/mcp`). When `None`, those endpoints are unauthenticated.
     pub admin_token: Option<Secret>,
-    /// PEM certificate chain / private key for TLS on the MQTT port. When both
-    /// are set the MQTT listener speaks TLS (MQTT-over-TLS, typically port 8883).
+    /// Address for a second, dedicated MQTT listener that always speaks TLS.
+    /// `None` disables it. Independent of and simultaneous with `listen_addr`
+    /// (which is always plain) — requires `tls_cert`/`tls_key`.
+    pub tls_listen_addr: Option<SocketAddr>,
+    /// PEM certificate chain / private key for TLS on `tls_listen_addr`.
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
-    /// PEM CA bundle used to verify client certificates on the MQTT port. When
-    /// set, mutual TLS is enforced (clients must present a trusted certificate).
+    /// PEM CA bundle used to verify client certificates on `tls_listen_addr`.
+    /// When set, mutual TLS is enforced (clients must present a trusted
+    /// certificate).
     pub tls_client_ca: Option<String>,
     /// Address for the MQTT-over-WebSocket listener. When `None`, WebSocket
     /// support is disabled. Carries MQTT in binary frames (subprotocol `mqtt`).
+    /// Always plain — see `ws_tls_listen_addr` for wss://.
     pub ws_listen_addr: Option<SocketAddr>,
-    /// PEM certificate chain / private key for TLS on the WebSocket port. When
-    /// both are set the WebSocket listener speaks TLS (wss://).
+    /// Address for a second, dedicated WebSocket listener that always speaks
+    /// TLS (wss://). `None` disables it. Independent of and simultaneous with
+    /// `ws_listen_addr` — requires `ws_tls_cert`/`ws_tls_key`.
+    pub ws_tls_listen_addr: Option<SocketAddr>,
+    /// PEM certificate chain / private key for TLS on `ws_tls_listen_addr`.
     pub ws_tls_cert: Option<String>,
     pub ws_tls_key: Option<String>,
-    /// PEM CA bundle used to verify client certificates on the WebSocket port.
-    /// When set, mutual TLS is enforced.
+    /// PEM CA bundle used to verify client certificates on
+    /// `ws_tls_listen_addr`. When set, mutual TLS is enforced.
     pub ws_tls_client_ca: Option<String>,
     /// PEM certificate chain / private key for TLS on the admin port. When both
     /// are set the admin server speaks HTTPS.
@@ -324,10 +334,12 @@ impl Default for Config {
             listen_addr: "0.0.0.0:1883".parse().unwrap(),
             admin_addr: "127.0.0.1:9001".parse().unwrap(),
             admin_token: None,
+            tls_listen_addr: None,
             tls_cert: None,
             tls_key: None,
             tls_client_ca: None,
             ws_listen_addr: None,
+            ws_tls_listen_addr: None,
             ws_tls_cert: None,
             ws_tls_key: None,
             ws_tls_client_ca: None,
@@ -388,12 +400,22 @@ impl Config {
         if let Some(v) = non_empty_env("MQTT_ADMIN_TOKEN") {
             self.admin_token = Some(Secret::new(v));
         }
+        if let Some(v) = non_empty_env("MQTT_TLS_LISTEN_ADDR") {
+            if let Ok(addr) = v.parse() {
+                self.tls_listen_addr = Some(addr);
+            }
+        }
         overlay_opt(&mut self.tls_cert, non_empty_env("MQTT_TLS_CERT"));
         overlay_opt(&mut self.tls_key, non_empty_env("MQTT_TLS_KEY"));
         overlay_opt(&mut self.tls_client_ca, non_empty_env("MQTT_TLS_CLIENT_CA"));
         if let Some(v) = non_empty_env("MQTT_WS_LISTEN_ADDR") {
             if let Ok(addr) = v.parse() {
                 self.ws_listen_addr = Some(addr);
+            }
+        }
+        if let Some(v) = non_empty_env("MQTT_WS_TLS_LISTEN_ADDR") {
+            if let Ok(addr) = v.parse() {
+                self.ws_tls_listen_addr = Some(addr);
             }
         }
         overlay_opt(&mut self.ws_tls_cert, non_empty_env("MQTT_WS_TLS_CERT"));
@@ -575,6 +597,7 @@ impl Config {
 
         cfg.apply_env();
         cli.apply(&mut cfg);
+        cfg.validate()?;
         Ok(Startup::Run(Box::new(cfg)))
     }
 
@@ -624,6 +647,12 @@ impl Config {
         }
         if let Some(v) = j_str(doc, "ws_listen_addr", source)? {
             self.ws_listen_addr = Some(parse_addr(&v, "ws_listen_addr")?);
+        }
+        if let Some(v) = j_str(doc, "tls_listen_addr", source)? {
+            self.tls_listen_addr = Some(parse_addr(&v, "tls_listen_addr")?);
+        }
+        if let Some(v) = j_str(doc, "ws_tls_listen_addr", source)? {
+            self.ws_tls_listen_addr = Some(parse_addr(&v, "ws_tls_listen_addr")?);
         }
 
         // String / path options.
@@ -775,6 +804,34 @@ impl Config {
 
         Ok(())
     }
+
+    /// Cross-field checks that no single layer can catch on its own (a later
+    /// layer might still supply the missing half), so — like
+    /// [`check_otlp_protocol`] — this runs once, after all layers are
+    /// applied, rather than per layer.
+    ///
+    /// A dedicated TLS listener address without its certificate would either
+    /// silently fail to bind (confusing) or, worse, silently bind plain
+    /// (a security footgun) — reject it outright instead.
+    fn validate(&self) -> Result<()> {
+        if self.tls_listen_addr.is_some() && (self.tls_cert.is_none() || self.tls_key.is_none()) {
+            return Err(MqttError::Config(
+                "tls_listen_addr is set but tls_cert/tls_key are not — both are required to \
+                 enable this listener"
+                    .to_string(),
+            ));
+        }
+        if self.ws_tls_listen_addr.is_some()
+            && (self.ws_tls_cert.is_none() || self.ws_tls_key.is_none())
+        {
+            return Err(MqttError::Config(
+                "ws_tls_listen_addr is set but ws_tls_cert/ws_tls_key are not — both are \
+                 required to enable this listener"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Fold any [`SECTION_NAMES`] tables present in `doc` up into its top level,
@@ -923,7 +980,9 @@ mod tests {
         let toml = r#"
 listen_addr = "127.0.0.1:1884"
 ws_listen_addr = "0.0.0.0:8080"
+tls_listen_addr = "0.0.0.0:8883"
 tls_cert = "server.pem"
+ws_tls_listen_addr = "0.0.0.0:8884"
 admin_token = "sekret"
 acl_path = "acl.toml"
 db_path = "/data/broker.db"
@@ -940,6 +999,14 @@ connection_rate_window_secs = 5
         assert_eq!(
             cfg.ws_listen_addr.map(|a| a.to_string()).as_deref(),
             Some("0.0.0.0:8080")
+        );
+        assert_eq!(
+            cfg.tls_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("0.0.0.0:8883")
+        );
+        assert_eq!(
+            cfg.ws_tls_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("0.0.0.0:8884")
         );
         assert_eq!(cfg.tls_cert.as_deref(), Some("server.pem"));
         assert_eq!(cfg.admin_token.as_ref().map(Secret::expose), Some("sekret"));
@@ -1112,6 +1179,37 @@ service_name = "edge-1"
     }
 
     #[test]
+    fn dedicated_tls_listener_requires_its_cert_and_key() {
+        // A TLS-labeled listener that silently fell back to plain would be a
+        // security footgun; a listener that silently failed to bind would be
+        // confusing. Reject the config outright instead.
+        let mut cfg = Config {
+            tls_listen_addr: Some("0.0.0.0:8883".parse().unwrap()),
+            ..Config::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("tls_listen_addr"), "{err}");
+
+        cfg.tls_cert = Some("server.pem".to_string());
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("tls_listen_addr"), "{err}");
+
+        cfg.tls_key = Some("server.key".to_string());
+        assert!(cfg.validate().is_ok());
+
+        let mut cfg = Config {
+            ws_tls_listen_addr: Some("0.0.0.0:8884".parse().unwrap()),
+            ..Config::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("ws_tls_listen_addr"), "{err}");
+
+        cfg.ws_tls_cert = Some("server.pem".to_string());
+        cfg.ws_tls_key = Some("server.key".to_string());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
     fn otlp_header_pairs_reject_malformed_input() {
         // A dropped API key is indistinguishable from an auth failure at the
         // collector, so a bad pair is an error, not a skip.
@@ -1201,6 +1299,13 @@ qos = 1
 listen_addr = "127.0.0.1:1884"
 max_connections_per_ip = 20
 
+[mqtt_tls]
+tls_listen_addr = "0.0.0.0:8883"
+tls_cert = "server.pem"
+
+[websockets]
+ws_tls_listen_addr = "0.0.0.0:8884"
+
 [storage]
 db_path = "/data/broker.db"
 max_queued_messages = 42
@@ -1217,6 +1322,15 @@ ha_discovery_prefix = "hass"
         cfg.apply_toml_str(toml, "t.toml").unwrap();
         assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
         assert_eq!(cfg.max_connections_per_ip, 20);
+        assert_eq!(
+            cfg.tls_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("0.0.0.0:8883")
+        );
+        assert_eq!(cfg.tls_cert.as_deref(), Some("server.pem"));
+        assert_eq!(
+            cfg.ws_tls_listen_addr.map(|a| a.to_string()).as_deref(),
+            Some("0.0.0.0:8884")
+        );
         assert_eq!(cfg.db_path, "/data/broker.db");
         assert_eq!(cfg.max_queued_messages, 42);
         assert_eq!(cfg.maximum_qos, QoS::AtLeastOnce);
