@@ -1,23 +1,28 @@
+# Network
 listen_addr = "0.0.0.0:1883"
 admin_addr = "127.0.0.1:9001"
+max_connections_per_ip = 0
+connection_rate_window_secs = 10
 
+# Storage & limits
 db_path = "mqtt_broker.db"
 max_packet_size = 1048576
 receive_maximum = 64
 max_session_expiry = 3600
 max_queued_messages = 1000
-max_connections_per_ip = 0
-connection_rate_window_secs = 10
 sys_interval = 10
 
+# Protocol capabilities (advertised in CONNACK)
 maximum_qos = 2
 retain_available = true
 topic_alias_maximum = 16
 
+# Telemetry export (OTLP, requires --features otel)
 otlp_interval = 60
 otlp_metrics = true
 otlp_logs = true
 service_name = "wispmq"
 
+# Home Assistant MQTT Discovery
 ha_discovery = false
 ha_discovery_prefix = "homeassistant"
