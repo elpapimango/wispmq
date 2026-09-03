@@ -158,38 +158,50 @@ TOML supports `#` comments, so annotate the file however you like; the table
 below is still the authoritative per-option reference. A full file looks like:
 
 ```toml
+# Network
 listen_addr = "0.0.0.0:1883"
+max_connections_per_ip = 0
+connection_rate_window_secs = 10
+
+# MQTT TLS
 tls_cert = "certs/server.pem"
 tls_key = "certs/server.key"
 tls_client_ca = "certs/ca.pem"
 
+# MQTT over WebSockets
 ws_listen_addr = "0.0.0.0:8080"
 
+# Admin TLS & auth
 admin_addr = "127.0.0.1:9001"
 admin_token = "change-me"
+
+# Authentication & authorization
 acl_path = "acl.json"
 
+# Storage & limits
 db_path = "mqtt_broker.db"
 max_packet_size = 1048576
 receive_maximum = 64
 max_session_expiry = 3600
 max_queued_messages = 1000
-max_connections_per_ip = 0
-connection_rate_window_secs = 10
 sys_interval = 10
 
+# Protocol capabilities (advertised in CONNACK)
 maximum_qos = 2
 retain_available = true
 topic_alias_maximum = 16
 server_keep_alive = 60
 
+# Telemetry export (OTLP, requires --features otel)
 otlp_endpoint = "http://127.0.0.1:4318"
 otlp_interval = 60
 service_name = "wispmq"
 
+# Home Assistant MQTT Discovery
 ha_discovery = false
 ha_discovery_prefix = "homeassistant"
 
+# otlp_headers is a table — must come after every plain key = value line
 [otlp_headers]
 "DD-API-KEY" = "..."
 ```
