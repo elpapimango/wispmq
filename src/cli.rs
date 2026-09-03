@@ -126,7 +126,7 @@ pub(crate) struct Cli {
     )]
     pub allow_anonymous: Option<bool>,
 
-    /// JSON ACL policy authorizing publish/subscribe per identity
+    /// TOML ACL policy authorizing publish/subscribe per identity
     /// (unset = allow all) [MQTT_ACL_FILE]
     #[arg(
         long,

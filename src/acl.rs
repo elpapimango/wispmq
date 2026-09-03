@@ -4,16 +4,19 @@
 //! client certificate, or `"anonymous"` when there is no client certificate)
 //! the right to publish to and/or subscribe to sets of topic filters.
 //!
-//! The policy is loaded from a JSON file:
+//! The policy is loaded from a TOML file:
 //!
-//! ```json
-//! {
-//!   "default": "deny",
-//!   "rules": [
-//!     { "identity": "sensor-01", "publish": ["sensors/01/#"], "subscribe": ["cmd/01/#"] },
-//!     { "identity": "*",         "subscribe": ["public/#"] }
-//!   ]
-//! }
+//! ```toml
+//! default = "deny"
+//!
+//! [[rules]]
+//! identity = "sensor-01"
+//! publish = ["sensors/01/#"]
+//! subscribe = ["cmd/01/#"]
+//!
+//! [[rules]]
+//! identity = "*"
+//! subscribe = ["public/#"]
 //! ```
 //!
 //! - `identity` matches the certificate CN exactly, or `"*"` for any identity.
@@ -62,7 +65,7 @@ impl Acl {
         self.enforced
     }
 
-    /// Load and validate an ACL policy from a JSON file.
+    /// Load and validate an ACL policy from a TOML file.
     pub fn load(path: &str) -> Result<Acl> {
         // Prevent path traversal attacks by rejecting paths containing '..'.
         let p = std::path::Path::new(path);
@@ -71,12 +74,26 @@ impl Acl {
         }
         let text = std::fs::read_to_string(p)
             .map_err(|e| MqttError::Config(format!("read ACL file {path}: {e}")))?;
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|e| MqttError::Config(format!("parse ACL file {path}: {e}")))?;
-        Acl::from_value(&value).map_err(|e| MqttError::Config(format!("ACL file {path}: {e}")))
+        Acl::from_toml_str(&text, path)
     }
 
-    /// Parse an ACL from a JSON value (also used by tests).
+    /// Parse and validate ACL policy TOML text. `source` names the file for
+    /// error messages (also used directly by tests, without touching the
+    /// filesystem — mirrors `Config::apply_toml_str`).
+    pub fn from_toml_str(text: &str, source: &str) -> Result<Acl> {
+        let toml_doc: toml::Value = toml::from_str(text)
+            .map_err(|e| MqttError::Config(format!("{source}: invalid TOML: {e}")))?;
+        // Pivot through JSON, same technique `Config::apply_toml_str` uses:
+        // `from_value` below only ever looked at a generic `serde_json::Value`,
+        // so it needs no changes to accept a TOML-sourced document.
+        let value: Value = serde_json::to_value(toml_doc)
+            .map_err(|e| MqttError::Config(format!("{source}: {e}")))?;
+        Acl::from_value(&value).map_err(|e| MqttError::Config(format!("{source}: {e}")))
+    }
+
+    /// Parse an ACL from a `serde_json::Value` — the shared representation
+    /// `from_toml_str` pivots the TOML source through (also used directly by
+    /// tests, format-agnostic either way).
     pub fn from_value(value: &Value) -> std::result::Result<Acl, String> {
         let default_allow = match value.get("default").and_then(Value::as_str) {
             None | Some("deny") => false,
@@ -220,5 +237,40 @@ mod tests {
     fn default_allow() {
         let a = Acl::from_value(&json!({ "default": "allow", "rules": [] })).unwrap();
         assert!(a.can_publish("x", "y"));
+    }
+
+    #[test]
+    fn toml_parses_multiple_rules() {
+        let toml = r#"
+default = "deny"
+
+[[rules]]
+identity = "sensor-01"
+publish = ["sensors/01/#"]
+subscribe = ["cmd/01/#"]
+
+[[rules]]
+identity = "*"
+subscribe = ["public/#"]
+"#;
+        let a = Acl::from_toml_str(toml, "acl.toml").unwrap();
+        assert!(a.can_publish("sensor-01", "sensors/01/temp"));
+        assert!(!a.can_publish("sensor-01", "sensors/02/temp"));
+        assert!(a.can_subscribe("anyone", "public/news"));
+    }
+
+    #[test]
+    fn toml_default_allow() {
+        let a = Acl::from_toml_str("default = \"allow\"", "acl.toml").unwrap();
+        assert!(a.can_publish("x", "y"));
+    }
+
+    #[test]
+    fn toml_rejects_bad_default_and_malformed_syntax() {
+        assert!(Acl::from_toml_str("default = \"maybe\"", "acl.toml").is_err());
+        assert!(Acl::from_toml_str("key = ", "acl.toml").is_err());
+        // A rule missing its required "identity" is rejected, not defaulted.
+        let toml = "[[rules]]\npublish = [\"a/#\"]\n";
+        assert!(Acl::from_toml_str(toml, "acl.toml").is_err());
     }
 }

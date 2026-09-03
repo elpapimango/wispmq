@@ -41,21 +41,28 @@ breaking changes carried over from the 0.9.1 waypoint (JSON config move, the
 change** — the config file format switched from JSON to TOML
 (`config::Config::apply_toml_str`, replacing `apply_json_str`;
 `wispmq.toml` replaces `wispmq.json`; `wispmq.example.toml` replaces
-`wispmq.example.json`). The ACL policy file (`--acl-file`) is unaffected —
-still JSON, a separate document serving a different purpose.
+`wispmq.example.json`). At the time, the ACL policy file (`--acl-file`) was
+unaffected — still JSON — but see the 0.9.5 waypoint below: it later moved
+too.
 
-Current status: `Cargo.toml` on `main` has since moved to a **0.9.4 waypoint**
-(same status 0.9.0/0.9.1/0.9.3-before-its-tag had: real, in commit history,
-not yet a tag/Release/image) for an Aikido security-fix pass — eight fixes
-closing session-takeover paths (epoch validation at the packet-dispatch
-boundary, sessions bound to authenticated identity with resubscription
-re-authorized on resume, reserved `$bridge/`/`$SYS/` client-id prefixes
-rejected), a bearer-token comparison timing leak, and path-traversal
-rejection (a `..` path component is refused) on `--acl-file`,
-`--password-file`, `--cert-file`, and `--key-file`. No breaking change, so
-this is a **patch** bump. CI (`ci.yml`) and image builds (`docker.yml`) are
-green on `main`. `git log` has the detail — this is the map. See "Done since
-0.9.0" below for what else has landed since 0.9.2.
+The **0.9.4 waypoint** (real, in commit history, not yet a tag/Release/image
+when it was current) was an Aikido security-fix pass — eight fixes closing
+session-takeover paths (epoch validation at the packet-dispatch boundary,
+sessions bound to authenticated identity with resubscription re-authorized on
+resume, reserved `$bridge/`/`$SYS/` client-id prefixes rejected), a
+bearer-token comparison timing leak, and path-traversal rejection (a `..`
+path component is refused) on `--acl-file`, `--password-file`, `--cert-file`,
+and `--key-file`. No breaking change — a **patch** bump.
+
+Current status: `Cargo.toml` on `main` has since moved to a **0.9.5
+waypoint** — **another breaking change**: the ACL policy file
+(`--acl-file`) switched from JSON to TOML (`acl::Acl::from_toml_str`,
+`[[rules]]` array-of-tables replacing the JSON `"rules"` array; `from_value`
+itself is unchanged — it already operated on a generic `serde_json::Value`,
+the same pivot-through-JSON technique `Config::apply_toml_str` uses), closing
+the inconsistency the 0.9.3 note above flagged. CI (`ci.yml`) and image
+builds (`docker.yml`) are green on `main`. `git log` has the detail — this is
+the map. See "Done since 0.9.0" below for what else has landed since 0.9.2.
 
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
@@ -198,6 +205,12 @@ Done since 0.9.0:
   `[section]` table matching the `--help` headings, purely for readability;
   bare keys still work identically and can't be mixed with the same key
   inside a section. See "Configuration" below (`flatten_sections`).
+- **ACL file switched from JSON to TOML** (0.9.5 waypoint, breaking) —
+  `acl::Acl::from_toml_str` replaces the JSON parse in `Acl::load`;
+  `Acl::from_value` (the shared validation, unchanged) still consumes a
+  generic `serde_json::Value`, so only the parse step at the top of `load`
+  needed to change. `[[rules]]` array-of-tables replaces the JSON `"rules"`
+  array. Matches the config file's own JSON→TOML move from 0.9.3.
 
 **Nothing is left on the roadmap** — every numbered item in `TODO.md` is done.
 Item 6 shipped as the **v0.9.2** release.
@@ -246,7 +259,7 @@ before changing it.
 - `ws` — WebSocket transport: `mqtt`-subprotocol handshake + byte-stream adapter (§6)
 - `tls` — rustls `TlsAcceptor` from PEM cert/key; client-cert CN extraction
 - `auth` — username/password credentials (PBKDF2-HMAC-SHA256 via `ring`)
-- `acl` — per-identity publish/subscribe authorization (JSON policy)
+- `acl` — per-identity publish/subscribe authorization (TOML policy)
 - `bridge` — broker-to-broker forwarding: outbound MQTT client per remote,
   reconnect+backoff, QoS 0/1/2 both ways, loop prevention via `no_local`
 - `metrics` — atomic counters + gauges; one `Snapshot` rendered two ways

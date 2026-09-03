@@ -181,7 +181,7 @@ ws_listen_addr = "0.0.0.0:8080"
 admin_token = "change-me"
 
 [auth]
-acl_path = "acl.json"
+acl_path = "acl.toml"
 
 [storage]
 db_path = "mqtt_broker.db"
@@ -263,7 +263,7 @@ Admin TLS & auth:
 Authentication & authorization:
       --password-file <FILE>        Username/password credentials [MQTT_PASSWORD_FILE]
       --allow-anonymous [<BOOL>]    Allow credential-less clients [MQTT_ALLOW_ANONYMOUS]
-      --acl-file <FILE>             JSON ACL policy per identity [MQTT_ACL_FILE]
+      --acl-file <FILE>             TOML ACL policy per identity [MQTT_ACL_FILE]
       --hash-password [<USERNAME>]  Print a credential line (password from stdin) and exit
 Storage & limits:
       --db-path <FILE>              SQLite database file [MQTT_DB_PATH]
@@ -607,7 +607,7 @@ implemented; a `GET /mcp` returns 405.)
 | `MQTT_ADMIN_TOKEN` | _(unset)_ | Bearer token for `/metrics` and `/mcp`; unset = open |
 | `MQTT_PASSWORD_FILE` | _(unset)_ | Username/password credential file; set = auth required |
 | `MQTT_ALLOW_ANONYMOUS` | `false` | Allow credential-less clients when a password file is set |
-| `MQTT_ACL_FILE` | _(unset)_ | JSON ACL policy per identity; unset = allow all |
+| `MQTT_ACL_FILE` | _(unset)_ | TOML ACL policy per identity; unset = allow all |
 | `MQTT_DB_PATH` | `mqtt_broker.db` | SQLite database file |
 | `MQTT_MAX_PACKET_SIZE` | `1048576` | Max accepted packet size (bytes) |
 | `MQTT_RECEIVE_MAXIMUM` | `64` | Server Receive Maximum |
@@ -735,10 +735,19 @@ authenticated **identity**, which the ACL (below) authorizes.
 Point `--password-file` / `MQTT_PASSWORD_FILE` at a credential file to require
 username/password authentication on CONNECT. Passwords are stored as
 **PBKDF2-HMAC-SHA256** with a per-user random salt; verification is
-constant-time. Generate an entry (password read from stdin):
+constant-time. A worked example with two users — `alice`, a sensor that only
+needs its own topics, and `bob`, a read-only dashboard client:
 
 ```bash
 wispmq --hash-password alice >> passwd     # prompts for the password
+wispmq --hash-password bob   >> passwd
+```
+
+`passwd` now has one line per user:
+
+```text
+alice:pbkdf2_sha256$200000$<salt-hex>$<hash-hex>
+bob:pbkdf2_sha256$200000$<salt-hex>$<hash-hex>
 ```
 
 Each line is `username:pbkdf2_sha256$iterations$salt$hash`. When a password file
@@ -750,7 +759,7 @@ a username must still authenticate). The authenticated username becomes the
 identity used for ACLs (below), overriding any client-certificate CN.
 
 ```bash
-mosquitto_pub -h 127.0.0.1 -p 1883 -V 5 -u alice -P s3cr3t -t t -m hi
+mosquitto_pub -h 127.0.0.1 -p 1883 -V 5 -u alice -P s3cr3t -t sensors/alice/temp -m 21.5
 ```
 
 ### Identity & ACLs
@@ -760,22 +769,35 @@ used, otherwise the **Common Name (CN)** of the mutual-TLS client certificate,
 otherwise `anonymous`. It is logged on connect and drives per-client access
 control.
 
-Point `--acl-file` / `MQTT_ACL_FILE` at a JSON policy to authorize publish and
+Point `--acl-file` / `MQTT_ACL_FILE` at a TOML policy to authorize publish and
 subscribe per identity. Without an ACL file every client may publish/subscribe
-anywhere (a warning is logged at startup).
+anywhere (a warning is logged at startup). Continuing the two-user example
+above, `alice` and `bob` get different grants:
 
-```json
-{
-  "default": "deny",
-  "rules": [
-    { "identity": "sensor-01", "publish": ["sensors/01/#"], "subscribe": ["cmd/01/#"] },
-    { "identity": "gateway",   "publish": ["#"],            "subscribe": ["#"] },
-    { "identity": "*",         "subscribe": ["public/#"] }
-  ]
-}
+```toml
+default = "deny"
+
+[[rules]]
+identity = "alice"
+publish = ["sensors/alice/#"]
+subscribe = ["cmd/alice/#"]
+
+[[rules]]
+identity = "bob"
+subscribe = ["sensors/#"]
+
+[[rules]]
+identity = "*"
+subscribe = ["public/#"]
 ```
 
-- `identity` — matches the certificate CN exactly, or `*` for any identity.
+`alice` may publish and subscribe only under her own topic tree; `bob` may
+subscribe broadly to read sensor data but can't publish anything; every
+identity (including anonymous, if allowed) can subscribe to `public/#` via the
+`*` rule.
+
+- `identity` — matches the authenticated username (or, without password auth,
+  the mutual-TLS certificate CN) exactly, or `*` for any identity.
 - `publish` / `subscribe` — MQTT topic filters (wildcards allowed) the identity
   is permitted to publish to / subscribe to. Multiple matching rules union.
 - `default` — action when no rule grants the operation: `deny` (default) or
@@ -808,7 +830,7 @@ published for this administrative close. If the file is missing or invalid, the
 error is logged and the **previous policy is kept**.
 
 ```bash
-# edit acl.json, then:
+# edit acl.toml, then:
 kill -HUP "$(pgrep -f target/release/wispmq)"
 ```
 

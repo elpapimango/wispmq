@@ -239,7 +239,7 @@ pub struct Config {
     /// PEM CA bundle used to verify client certificates on the admin port.
     /// When set, mutual TLS is enforced on the admin server.
     pub admin_tls_client_ca: Option<String>,
-    /// Path to a JSON ACL policy authorizing publish/subscribe per identity.
+    /// Path to a TOML ACL policy authorizing publish/subscribe per identity.
     /// When unset, all operations are permitted.
     pub acl_path: Option<String>,
     /// Path to a username/password credential file. When set, clients must
@@ -925,7 +925,7 @@ listen_addr = "127.0.0.1:1884"
 ws_listen_addr = "0.0.0.0:8080"
 tls_cert = "server.pem"
 admin_token = "sekret"
-acl_path = "acl.json"
+acl_path = "acl.toml"
 db_path = "/data/broker.db"
 max_packet_size = 2097152
 receive_maximum = 100
