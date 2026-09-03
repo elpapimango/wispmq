@@ -154,31 +154,36 @@ names as the environment variables minus the `MQTT_` prefix, and the same as
 the CLI flags with `-` replaced by `_`. A minimal, ready-to-copy file ships as
 [`wispmq.example.toml`](wispmq.example.toml).
 
-TOML supports `#` comments, so annotate the file however you like; the table
-below is still the authoritative per-option reference. A full file looks like:
+Options can also be grouped under a `[section]` table — purely organizational
+sugar mirroring the `--help` headings below; `[network]` + `listen_addr = 1`
+reaches the same field as bare `listen_addr = 1` does, so pick whichever reads
+better and don't set the same key both ways (that's a startup error, not a
+silent pick). The recognised section names are `network`, `mqtt_tls`,
+`websockets`, `admin`, `auth`, `storage`, `protocol`, `otlp`, and
+`home_assistant`. A full file looks like:
 
 ```toml
-# Network
+[network]
 listen_addr = "0.0.0.0:1883"
+admin_addr = "127.0.0.1:9001"
 max_connections_per_ip = 0
 connection_rate_window_secs = 10
 
-# MQTT TLS
+[mqtt_tls]
 tls_cert = "certs/server.pem"
 tls_key = "certs/server.key"
 tls_client_ca = "certs/ca.pem"
 
-# MQTT over WebSockets
+[websockets]
 ws_listen_addr = "0.0.0.0:8080"
 
-# Admin TLS & auth
-admin_addr = "127.0.0.1:9001"
+[admin]
 admin_token = "change-me"
 
-# Authentication & authorization
+[auth]
 acl_path = "acl.json"
 
-# Storage & limits
+[storage]
 db_path = "mqtt_broker.db"
 max_packet_size = 1048576
 receive_maximum = 64
@@ -186,25 +191,27 @@ max_session_expiry = 3600
 max_queued_messages = 1000
 sys_interval = 10
 
-# Protocol capabilities (advertised in CONNACK)
+[protocol]
 maximum_qos = 2
 retain_available = true
 topic_alias_maximum = 16
 server_keep_alive = 60
 
-# Telemetry export (OTLP, requires --features otel)
+[otlp]
 otlp_endpoint = "http://127.0.0.1:4318"
 otlp_interval = 60
 service_name = "wispmq"
 
-# Home Assistant MQTT Discovery
+[otlp.otlp_headers]
+"DD-API-KEY" = "..."
+
+[home_assistant]
 ha_discovery = false
 ha_discovery_prefix = "homeassistant"
-
-# otlp_headers is a table — must come after every plain key = value line
-[otlp_headers]
-"DD-API-KEY" = "..."
 ```
+
+TOML supports `#` comments too, so annotate the file however you like; the
+table below is still the authoritative per-option reference.
 
 `tls_client_ca` enables mutual TLS; `ws_tls_cert`/`ws_tls_key` put the
 WebSocket listener behind TLS (`wss://`); `server_keep_alive` overrides the
@@ -213,9 +220,10 @@ build with `--features otel` (see
 [OTLP telemetry export](#otlp-telemetry-export-push)); `ha_discovery` turns on
 Home Assistant MQTT Discovery (see
 [below](#home-assistant-mqtt-discovery)). Omit any key to keep its default.
-`otlp_headers` is a table (`[otlp_headers]`) and, like every other TOML table,
-must come after any plain `key = value` lines in the file — TOML syntax
-requires it.
+`otlp_headers` is a table — `[otlp_headers]`, or nested as `[otlp.otlp_headers]`
+inside the `otlp` section — and, like every TOML table, must come after any
+plain `key = value` line belonging to the same table (including a section's
+own `key = value` lines above it): TOML syntax requires it.
 
 ## Command-line options
 
@@ -446,8 +454,11 @@ statistic with no add-on, custom component, or `configuration.yaml` edit on
 the HA side. Off by default.
 
 ```toml
+[home_assistant]
 ha_discovery = true
 ha_discovery_prefix = "homeassistant"
+
+[otlp]
 service_name = "wispmq"
 ```
 
@@ -489,6 +500,7 @@ keys, so one config file works against both — and warns loudly at startup if
 export is configured but not compiled in, rather than silently doing nothing.
 
 ```toml
+[otlp]
 otlp_endpoint = "http://127.0.0.1:4318"
 otlp_protocol = "http"
 otlp_interval = 60
@@ -496,7 +508,7 @@ otlp_metrics = true
 otlp_logs = true
 service_name = "wispmq"
 
-[otlp_headers]
+[otlp.otlp_headers]
 "DD-API-KEY" = "..."
 ```
 

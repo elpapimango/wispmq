@@ -64,6 +64,26 @@ const KNOWN_KEYS: &[&str] = &[
     "ha_discovery_prefix",
 ];
 
+/// Top-level TOML tables that exist purely to group related options for
+/// readability (mirrors the `--help` headings) — flattened into the same
+/// top-level keys `j_str`/`j_bool`/`j_i64`/`j_u32` already read below, so
+/// nothing past [`flatten_sections`] needs to know sections exist. A key may
+/// be written bare *or* inside its section (not both); `otlp_headers` and
+/// `bridges` are real structured data, not organizational, and keep their
+/// own top-level/array-of-tables shape (`otlp_headers` can still nest as
+/// `[otlp.otlp_headers]`, since flattening `[otlp]` carries it up unchanged).
+const SECTION_NAMES: &[&str] = &[
+    "network",
+    "mqtt_tls",
+    "websockets",
+    "admin",
+    "auth",
+    "storage",
+    "protocol",
+    "otlp",
+    "home_assistant",
+];
+
 /// Default config-file names looked for in the working directory.
 const DEFAULT_CONFIG_FILES: &[&str] = &["wispmq.toml"];
 
@@ -582,6 +602,7 @@ impl Config {
         // JSON object here, never `null` or a scalar.
         let doc: Value = serde_json::to_value(toml_doc)
             .map_err(|e| MqttError::Config(format!("{source}: {e}")))?;
+        let doc = flatten_sections(doc, source)?;
         let Some(map) = doc.as_object() else {
             return Err(MqttError::Config(format!(
                 "{source}: top level must be a table of \"option\" = value pairs"
@@ -754,6 +775,36 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Fold any [`SECTION_NAMES`] tables present in `doc` up into its top level,
+/// so a section is purely organizational sugar: `[network]\nlisten_addr = 1`
+/// and bare `listen_addr = 1` reach [`Config`] the same way. A key set both
+/// bare and inside a section (or in two sections) is a conflict, not a
+/// silent overwrite — same spirit as the unknown-key check that follows.
+fn flatten_sections(doc: Value, source: &str) -> Result<Value> {
+    let Some(map) = doc.as_object() else {
+        return Ok(doc);
+    };
+    let mut flat = serde_json::Map::with_capacity(map.len());
+    for (key, value) in map {
+        if SECTION_NAMES.contains(&key.as_str()) {
+            let section = value
+                .as_object()
+                .ok_or_else(|| MqttError::Config(format!("{source}: '{key}' must be a table")))?;
+            for (k, v) in section {
+                if flat.insert(k.clone(), v.clone()).is_some() {
+                    return Err(MqttError::Config(format!(
+                        "{source}: key '{k}' is set more than once — check for it \
+                         both bare and inside a [section], or in two sections"
+                    )));
+                }
+            }
+        } else if flat.insert(key.clone(), value.clone()).is_some() {
+            unreachable!("a TOML/JSON table cannot have a duplicate key");
+        }
+    }
+    Ok(Value::Object(flat))
 }
 
 /// A default config file present in the working directory, if any.
@@ -1139,6 +1190,84 @@ qos = 1
             crate::bridge::Direction::Out
         ));
         assert_eq!(b.topics[0].qos, QoS::AtLeastOnce);
+    }
+
+    #[test]
+    fn sections_group_options_like_bare_keys() {
+        // A `[section]` table is purely organizational: every key inside it
+        // must land exactly where the equivalent bare key would.
+        let toml = r#"
+[network]
+listen_addr = "127.0.0.1:1884"
+max_connections_per_ip = 20
+
+[storage]
+db_path = "/data/broker.db"
+max_queued_messages = 42
+
+[protocol]
+maximum_qos = 1
+retain_available = false
+
+[home_assistant]
+ha_discovery = true
+ha_discovery_prefix = "hass"
+"#;
+        let mut cfg = Config::default();
+        cfg.apply_toml_str(toml, "t.toml").unwrap();
+        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
+        assert_eq!(cfg.max_connections_per_ip, 20);
+        assert_eq!(cfg.db_path, "/data/broker.db");
+        assert_eq!(cfg.max_queued_messages, 42);
+        assert_eq!(cfg.maximum_qos, QoS::AtLeastOnce);
+        assert!(!cfg.retain_available);
+        assert!(cfg.ha_discovery);
+        assert_eq!(cfg.ha_discovery_prefix, "hass");
+    }
+
+    #[test]
+    fn otlp_headers_nests_under_the_otlp_section() {
+        // Flattening `[otlp]` carries `otlp_headers` up unchanged, so it can
+        // still be written as a genuine sub-table, `[otlp.otlp_headers]`.
+        let toml = r#"
+[otlp]
+otlp_endpoint = "http://127.0.0.1:4318"
+service_name = "edge-1"
+
+[otlp.otlp_headers]
+"DD-API-KEY" = "abc123"
+"#;
+        let mut cfg = Config::default();
+        cfg.apply_toml_str(toml, "t.toml").unwrap();
+        assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://127.0.0.1:4318"));
+        assert_eq!(cfg.service_name, "edge-1");
+        assert_eq!(
+            cfg.otlp_headers.iter().collect::<Vec<_>>(),
+            vec![("DD-API-KEY", "abc123")]
+        );
+    }
+
+    #[test]
+    fn a_key_set_bare_and_in_a_section_conflicts() {
+        let mut cfg = Config::default();
+        let err = cfg
+            .apply_toml_str(
+                "db_path = \"a.db\"\n\n[storage]\ndb_path = \"b.db\"\n",
+                "t.toml",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("db_path"), "{err}");
+    }
+
+    #[test]
+    fn unknown_section_name_is_rejected() {
+        // Falls through the same unknown-key check as any other bad key: a
+        // table under a name that isn't a real section isn't silently kept.
+        let mut cfg = Config::default();
+        assert!(cfg
+            .apply_toml_str("[bogus]\nlisten_addr = \"0.0.0.0:1\"\n", "t.toml")
+            .is_err());
     }
 
     #[test]

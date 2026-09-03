@@ -193,6 +193,11 @@ Done since 0.9.0:
   short-circuits its iteration count, closing a bearer-token-length timing
   leak. `acl::Acl::load`, `auth::Credentials::load`, and `tls`'s cert/key
   loaders now reject any path containing a `..` component.
+- **Optional TOML `[section]` grouping** (0.9.4 waypoint, no breaking change,
+  additive) — every config-file option can now be written inside a
+  `[section]` table matching the `--help` headings, purely for readability;
+  bare keys still work identically and can't be mixed with the same key
+  inside a section. See "Configuration" below (`flatten_sections`).
 
 **Nothing is left on the roadmap** — every numbered item in `TODO.md` is done.
 Item 6 shipped as the **v0.9.2** release.
@@ -353,6 +358,18 @@ tables, `[[bridges]]`, config-file only) and `otlp_headers` (a table, `[otlp_hea
 also `MQTT_OTLP_HEADERS="K=V,K=V"` and repeated `--otlp-header K=V`). A credential
 value goes in `config::Secret` and its container gets a hand-written redacting
 `Debug` — `Config` derives `Debug` and is one `{cfg:?}` away from a log line.
+
+Every other option can additionally be written inside a `[section]` table
+(`network`, `mqtt_tls`, `websockets`, `admin`, `auth`, `storage`, `protocol`,
+`otlp`, `home_assistant` — `config::SECTION_NAMES`, mirroring the `--help`
+headings) purely for readability: `apply_toml_str` calls `flatten_sections`
+first, which folds a recognised section's keys up to the document's top level
+before the existing flat `j_str`/`j_bool`/... lookups ever run, so a key
+reaches `Config` the same way whether it was written bare or inside its
+section. Setting the same key both ways (or in two sections) is a config
+error, not a silent pick. `otlp_headers` can nest as `[otlp.otlp_headers]`
+since flattening `[otlp]` carries it up unchanged. When adding a new option,
+put it in the README's per-section reference too.
 
 An option whose *value* needs validating beyond its type (`otlp_protocol`) is
 checked **once**, at startup, rather than per layer: the env layer cannot return
