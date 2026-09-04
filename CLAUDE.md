@@ -76,11 +76,17 @@ Assistant's Mosquitto add-on shows four *always-present* ports (Normal MQTT,
 MQTT over WebSocket, and TLS variants of both) because mosquitto always runs
 all four listeners — this waypoint gives WispMQ the same real capability
 instead of faking a 4-way choice with a single listener toggling modes.
-**Migration**: a deployment that set `tls_cert`/`tls_key` (or the `ws_*`
-equivalents) without the new `*_listen_addr` loses TLS on that port after
-upgrading — add the matching `tls_listen_addr`/`ws_tls_listen_addr` to keep
-it (same address as before is fine; the port just needs naming explicitly
-now). `server.rs`'s `run`/`run_ws` (always plain) gained siblings
+**Migration**: `Config::validate` also rejects the mirror case — `tls_cert`/
+`tls_key` (or the `ws_*` equivalents) set without the matching
+`*_listen_addr` refuses to start rather than silently coming up without TLS,
+since that pairing is exactly what a pre-0.9.6 config (TLS auto-activated on
+`listen_addr` from cert presence alone) looks like after upgrading with
+nothing else changed — a caught-at-startup error beats a broker that quietly
+serves plaintext where an operator's config says they want TLS. Add the
+matching `tls_listen_addr`/`ws_tls_listen_addr` to keep TLS (same address as
+before is fine; the port just needs naming explicitly now), or drop the
+now-unused cert/key options if going plain was actually intended.
+`server.rs`'s `run`/`run_ws` (always plain) gained siblings
 `run_tls`/`run_ws_tls` (always TLS, no-op if their address is unset), both
 built around new private `serve_mqtt`/`serve_ws` helpers so the accept-loop
 body isn't duplicated four times. CI (`ci.yml`) and image builds
@@ -432,7 +438,7 @@ format.
 
 ## Tests
 
-114 tests on default features (120 with `--features otel`), plus five
+115 tests on default features (121 with `--features otel`), plus five
 `#[ignore]`d benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`,
 `config`, `auth`, `storage`, `metrics`, `otel`); integration suites are in
 `tests/`:
@@ -569,9 +575,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (114 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (115 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (120).
+  `cargo test --features otel` (121).
 
 ## Conventions
 

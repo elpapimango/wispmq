@@ -812,12 +812,29 @@ impl Config {
     ///
     /// A dedicated TLS listener address without its certificate would either
     /// silently fail to bind (confusing) or, worse, silently bind plain
-    /// (a security footgun) — reject it outright instead.
+    /// (a security footgun) — reject it outright instead. The reverse is
+    /// checked too: `tls_cert`/`tls_key` have no consumer other than
+    /// `tls_listen_addr` (same for the `ws_` pair), so a cert set without the
+    /// listener address is always dead config — and, since 0.9.6, exactly
+    /// the shape a deployment upgrading from the pre-0.9.6 single-listener
+    /// model leaves behind (TLS used to auto-activate on `listen_addr`
+    /// whenever `tls_cert`/`tls_key` were set). Silently accepting it would
+    /// mean the broker starts up with no TLS where the operator's own config
+    /// says they want it — reject it instead of downgrading quietly.
     fn validate(&self) -> Result<()> {
         if self.tls_listen_addr.is_some() && (self.tls_cert.is_none() || self.tls_key.is_none()) {
             return Err(MqttError::Config(
                 "tls_listen_addr is set but tls_cert/tls_key are not — both are required to \
                  enable this listener"
+                    .to_string(),
+            ));
+        }
+        if (self.tls_cert.is_some() || self.tls_key.is_some()) && self.tls_listen_addr.is_none() {
+            return Err(MqttError::Config(
+                "tls_cert/tls_key are set but tls_listen_addr is not, so they have no effect \
+                 (tls_cert/tls_key no longer activate TLS on listen_addr — that now requires \
+                 tls_listen_addr; add it to keep TLS, or remove tls_cert/tls_key if that's \
+                 intentional)"
                     .to_string(),
             ));
         }
@@ -827,6 +844,17 @@ impl Config {
             return Err(MqttError::Config(
                 "ws_tls_listen_addr is set but ws_tls_cert/ws_tls_key are not — both are \
                  required to enable this listener"
+                    .to_string(),
+            ));
+        }
+        if (self.ws_tls_cert.is_some() || self.ws_tls_key.is_some())
+            && self.ws_tls_listen_addr.is_none()
+        {
+            return Err(MqttError::Config(
+                "ws_tls_cert/ws_tls_key are set but ws_tls_listen_addr is not, so they have no \
+                 effect (ws_tls_cert/ws_tls_key no longer activate TLS on ws_listen_addr — that \
+                 now requires ws_tls_listen_addr; add it to keep TLS, or remove \
+                 ws_tls_cert/ws_tls_key if that's intentional)"
                     .to_string(),
             ));
         }
@@ -1207,6 +1235,36 @@ service_name = "edge-1"
         cfg.ws_tls_cert = Some("server.pem".to_string());
         cfg.ws_tls_key = Some("server.key".to_string());
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_lone_tls_cert_without_its_listen_addr_is_rejected_not_silently_ignored() {
+        // The exact shape a pre-0.9.6 config leaves behind after upgrading
+        // without adding the new *_listen_addr: tls_cert/tls_key set (old
+        // habit — used to be enough to turn TLS on for listen_addr), but no
+        // tls_listen_addr. Silently starting up with no TLS anywhere would be
+        // a silent security downgrade; reject it instead.
+        let cfg = Config {
+            tls_cert: Some("server.pem".to_string()),
+            tls_key: Some("server.key".to_string()),
+            ..Config::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("tls_listen_addr"), "{err}");
+
+        // Either half alone is just as dead — same rejection.
+        let cfg = Config {
+            tls_cert: Some("server.pem".to_string()),
+            ..Config::default()
+        };
+        assert!(cfg.validate().is_err());
+
+        let cfg = Config {
+            ws_tls_key: Some("server.key".to_string()),
+            ..Config::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("ws_tls_listen_addr"), "{err}");
     }
 
     #[test]
