@@ -92,10 +92,12 @@ async fn serve_mqtt(
     }
 }
 
-/// Bind and serve the plain MQTT listener (`config.listen_addr`, always set)
-/// until the process is stopped.
+/// Bind and serve the plain MQTT listener until the process is stopped.
+/// Requires `config.listen_addr` to be set; a no-op (`Ok(())`) otherwise.
 pub async fn run(broker: Broker) -> Result<()> {
-    let addr = broker.config().listen_addr;
+    let Some(addr) = broker.config().listen_addr else {
+        return Ok(());
+    };
     serve_mqtt(broker, addr, None, "").await
 }
 

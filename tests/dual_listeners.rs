@@ -91,7 +91,7 @@ async fn plain_and_tls_mqtt_listeners_serve_simultaneously() {
     let plain_addr = free_addr();
     let tls_addr = free_addr();
     let config = Config {
-        listen_addr: plain_addr,
+        listen_addr: Some(plain_addr),
         tls_listen_addr: Some(tls_addr),
         tls_cert: Some(cert_path.to_string_lossy().into_owned()),
         tls_key: Some(key_path.to_string_lossy().into_owned()),

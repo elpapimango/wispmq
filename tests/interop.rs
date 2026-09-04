@@ -21,7 +21,7 @@ async fn start_broker() -> String {
     drop(listener);
 
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         ..Config::default()
     };
     let broker = Broker::new(

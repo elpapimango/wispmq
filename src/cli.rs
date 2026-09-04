@@ -39,7 +39,8 @@ pub(crate) struct Cli {
     #[arg(long, value_name = "FILE", help_heading = "Config file")]
     pub config: Option<String>,
 
-    /// MQTT listener bind address [MQTT_LISTEN_ADDR] (default 0.0.0.0:1883)
+    /// MQTT listener bind address [MQTT_LISTEN_ADDR] (default 0.0.0.0:1883).
+    /// A port of 0 disables this listener.
     #[arg(long, value_name = "ADDR", help_heading = "Network")]
     pub listen_addr: Option<SocketAddr>,
 
@@ -59,7 +60,8 @@ pub(crate) struct Cli {
 
     /// Bind a second, dedicated MQTT listener that always speaks TLS,
     /// independent of and simultaneous with --listen-addr (always plain)
-    /// [MQTT_TLS_LISTEN_ADDR]. Requires --tls-cert/--tls-key.
+    /// [MQTT_TLS_LISTEN_ADDR]. Requires --tls-cert/--tls-key. A port of 0
+    /// disables this listener.
     #[arg(long, value_name = "ADDR", help_heading = "MQTT TLS")]
     pub tls_listen_addr: Option<SocketAddr>,
 
@@ -77,13 +79,15 @@ pub(crate) struct Cli {
     pub tls_client_ca: Option<String>,
 
     /// Enable the WebSocket listener on this address (subprotocol "mqtt"),
-    /// always plain [MQTT_WS_LISTEN_ADDR]
+    /// always plain [MQTT_WS_LISTEN_ADDR]. A port of 0 disables this
+    /// listener.
     #[arg(long, value_name = "ADDR", help_heading = "MQTT over WebSockets")]
     pub ws_listen_addr: Option<SocketAddr>,
 
     /// Bind a second, dedicated WebSocket listener that always speaks TLS
     /// (wss://), independent of and simultaneous with --ws-listen-addr
-    /// [MQTT_WS_TLS_LISTEN_ADDR]. Requires --ws-tls-cert/--ws-tls-key.
+    /// [MQTT_WS_TLS_LISTEN_ADDR]. Requires --ws-tls-cert/--ws-tls-key. A
+    /// port of 0 disables this listener.
     #[arg(long, value_name = "ADDR", help_heading = "MQTT over WebSockets")]
     pub ws_tls_listen_addr: Option<SocketAddr>,
 
@@ -320,7 +324,7 @@ impl Cli {
     /// acted on by `Config::load` before the other layers are read.
     pub(crate) fn apply(&self, cfg: &mut Config) {
         if let Some(v) = self.listen_addr {
-            cfg.listen_addr = v;
+            cfg.listen_addr = Some(v);
         }
         if let Some(v) = self.admin_addr {
             cfg.admin_addr = v;
@@ -497,7 +501,7 @@ mod tests {
             "--ws-tls-listen-addr",
             "127.0.0.1:3",
         ]);
-        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1");
+        assert_eq!(cfg.listen_addr.unwrap().to_string(), "127.0.0.1:1");
         assert_eq!(cfg.receive_maximum, 10);
         assert_eq!(
             cfg.tls_listen_addr.map(|a| a.to_string()).as_deref(),
@@ -553,7 +557,7 @@ mod tests {
             "20",
         ])
         .apply(&mut cfg);
-        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1"); // from file
+        assert_eq!(cfg.listen_addr.unwrap().to_string(), "127.0.0.1:1"); // from file
         assert_eq!(cfg.receive_maximum, 42); // CLI override
         assert_eq!(cfg.max_queued_messages, 7); // CLI override
         assert_eq!(cfg.max_connections_per_ip, 20); // CLI override

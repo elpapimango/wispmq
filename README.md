@@ -223,7 +223,15 @@ table below is still the authoritative per-option reference.
 needs `tls_cert`/`tls_key`; `tls_client_ca` on top of those enables mutual
 TLS. `ws_tls_listen_addr` is the WebSocket equivalent (`wss://`), independent
 of the always-plain `ws_listen_addr`, needing `ws_tls_cert`/`ws_tls_key`
-(plus `ws_tls_client_ca` for mutual TLS). `server_keep_alive` overrides the
+(plus `ws_tls_client_ca` for mutual TLS). Any of these four addresses —
+`listen_addr` included — can be turned off with a port of `0`
+(`"0.0.0.0:0"`), the same as leaving it unset; a running-headless-on-TLS-only
+broker (`listen_addr = "0.0.0.0:0"` + `tls_listen_addr` configured) is a
+supported configuration. `:0` is also the only way to override an address a
+lower config layer already turned on back off, since a higher layer
+otherwise only ever supplies a new address, never un-sets one — a TOML file
+enabling `ws_listen_addr`, then `--ws-listen-addr 0.0.0.0:0` on the command
+line disabling it again, for instance. `server_keep_alive` overrides the
 client's Keep Alive; the `otlp_*` keys turn on telemetry export and need a
 build with `--features otel` (see
 [OTLP telemetry export](#otlp-telemetry-export-push)); `ha_discovery` turns on
@@ -654,7 +662,7 @@ and routing core:
 
 | Mode | How to enable |
 |------|---------------|
-| Plain MQTT (TCP) | default (`--listen-addr`), always plain |
+| Plain MQTT (TCP) | default (`--listen-addr`), always plain; `--listen-addr host:0` turns it off |
 | MQTT over TLS | `--tls-listen-addr` + `--tls-cert` + `--tls-key`, on its own address |
 | MQTT over TLS with client certificate (mTLS) | add `--tls-client-ca` |
 | MQTT over WebSockets | `--ws-listen-addr`, always plain |
@@ -665,7 +673,10 @@ MQTT port and a TLS MQTT port on different addresses, sharing the same
 certificate if you want, plus a plain and a TLS WebSocket port likewise. Each
 `*_tls_listen_addr` requires its matching cert + key; the plain address next
 to it (`listen_addr`/`ws_listen_addr`) never gets wrapped in TLS implicitly.
-WebSocket connections carry MQTT Control Packets in binary frames and
+Any address, including `listen_addr`, can be switched off with a port of `0`
+— a broker with only `tls_listen_addr` configured (`listen_addr` disabled)
+is a valid, TLS-only deployment. WebSocket connections carry MQTT Control
+Packets in binary frames and
 negotiate the `mqtt` subprotocol (spec §6); packet boundaries need not align
 with frame boundaries. TLS termination and client-certificate identity (CN)
 work identically on both transports. Every transport accepts MQTT **v3.1,

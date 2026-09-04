@@ -29,7 +29,7 @@ use common::free_addr;
 async fn start_broker() -> SocketAddr {
     let addr = free_addr();
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         sys_interval: 0, // keep $SYS traffic out of the way
         ..Config::default()
     };

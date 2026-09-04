@@ -209,8 +209,12 @@ pub fn check_otlp_protocol(v: &str) -> Result<()> {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Address the MQTT TCP listener binds to.
-    pub listen_addr: SocketAddr,
+    /// Address the plain MQTT TCP listener binds to. `None`, or a port of
+    /// `0`, disables it — the latter is the explicit, layer-independent way
+    /// to turn it (or any of the other three listener addresses) off, since
+    /// a higher config layer can otherwise only ever supply a new address,
+    /// never force one a lower layer set back to unconfigured.
+    pub listen_addr: Option<SocketAddr>,
     /// Address the admin HTTP server (health, Prometheus metrics, MCP) binds
     /// to. Kept separate from the MQTT port.
     pub admin_addr: SocketAddr,
@@ -218,8 +222,9 @@ pub struct Config {
     /// (`/metrics`, `/mcp`). When `None`, those endpoints are unauthenticated.
     pub admin_token: Option<Secret>,
     /// Address for a second, dedicated MQTT listener that always speaks TLS.
-    /// `None` disables it. Independent of and simultaneous with `listen_addr`
-    /// (which is always plain) — requires `tls_cert`/`tls_key`.
+    /// `None`, or a port of `0`, disables it. Independent of and
+    /// simultaneous with `listen_addr` (which is always plain) — requires
+    /// `tls_cert`/`tls_key`.
     pub tls_listen_addr: Option<SocketAddr>,
     /// PEM certificate chain / private key for TLS on `tls_listen_addr`.
     pub tls_cert: Option<String>,
@@ -228,13 +233,14 @@ pub struct Config {
     /// When set, mutual TLS is enforced (clients must present a trusted
     /// certificate).
     pub tls_client_ca: Option<String>,
-    /// Address for the MQTT-over-WebSocket listener. When `None`, WebSocket
-    /// support is disabled. Carries MQTT in binary frames (subprotocol `mqtt`).
+    /// Address for the MQTT-over-WebSocket listener. `None`, or a port of
+    /// `0`, disables it. Carries MQTT in binary frames (subprotocol `mqtt`).
     /// Always plain — see `ws_tls_listen_addr` for wss://.
     pub ws_listen_addr: Option<SocketAddr>,
     /// Address for a second, dedicated WebSocket listener that always speaks
-    /// TLS (wss://). `None` disables it. Independent of and simultaneous with
-    /// `ws_listen_addr` — requires `ws_tls_cert`/`ws_tls_key`.
+    /// TLS (wss://). `None`, or a port of `0`, disables it. Independent of
+    /// and simultaneous with `ws_listen_addr` — requires
+    /// `ws_tls_cert`/`ws_tls_key`.
     pub ws_tls_listen_addr: Option<SocketAddr>,
     /// PEM certificate chain / private key for TLS on `ws_tls_listen_addr`.
     pub ws_tls_cert: Option<String>,
@@ -331,7 +337,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            listen_addr: "0.0.0.0:1883".parse().unwrap(),
+            listen_addr: Some("0.0.0.0:1883".parse().unwrap()),
             admin_addr: "127.0.0.1:9001".parse().unwrap(),
             admin_token: None,
             tls_listen_addr: None,
@@ -389,7 +395,7 @@ impl Config {
     pub fn apply_env(&mut self) {
         if let Some(v) = non_empty_env("MQTT_LISTEN_ADDR") {
             if let Ok(addr) = v.parse() {
-                self.listen_addr = addr;
+                self.listen_addr = Some(addr);
             }
         }
         if let Some(v) = non_empty_env("MQTT_ADMIN_ADDR") {
@@ -597,6 +603,7 @@ impl Config {
 
         cfg.apply_env();
         cli.apply(&mut cfg);
+        cfg.normalize();
         cfg.validate()?;
         Ok(Startup::Run(Box::new(cfg)))
     }
@@ -640,7 +647,7 @@ impl Config {
 
         // Socket addresses.
         if let Some(v) = j_str(doc, "listen_addr", source)? {
-            self.listen_addr = parse_addr(&v, "listen_addr")?;
+            self.listen_addr = Some(parse_addr(&v, "listen_addr")?);
         }
         if let Some(v) = j_str(doc, "admin_addr", source)? {
             self.admin_addr = parse_addr(&v, "admin_addr")?;
@@ -810,6 +817,27 @@ impl Config {
     /// [`check_otlp_protocol`] — this runs once, after all layers are
     /// applied, rather than per layer.
     ///
+    /// A port of `0` on any of the four listener addresses means "off,"
+    /// same as leaving the field unset — the explicit form, since under the
+    /// layered config model (defaults < file < env < CLI, each layer only
+    /// ever supplying a *new* `Some` value) nothing else lets a higher layer
+    /// turn back off a listener a lower one turned on. Runs once, straight
+    /// after the CLI layer and before [`Config::validate`], so validation
+    /// sees the normalized state (an explicitly `:0`-disabled TLS listener
+    /// must not then also be rejected for a "missing" certificate).
+    fn normalize(&mut self) {
+        for addr in [
+            &mut self.listen_addr,
+            &mut self.tls_listen_addr,
+            &mut self.ws_listen_addr,
+            &mut self.ws_tls_listen_addr,
+        ] {
+            if addr.is_some_and(|a| a.port() == 0) {
+                *addr = None;
+            }
+        }
+    }
+
     /// A dedicated TLS listener address without its certificate would either
     /// silently fail to bind (confusing) or, worse, silently bind plain
     /// (a security footgun) — reject it outright instead. The reverse is
@@ -1023,7 +1051,7 @@ connection_rate_window_secs = 5
 "#;
         let mut cfg = Config::default();
         cfg.apply_toml_str(toml, "test.toml").unwrap();
-        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
+        assert_eq!(cfg.listen_addr.unwrap().to_string(), "127.0.0.1:1884");
         assert_eq!(
             cfg.ws_listen_addr.map(|a| a.to_string()).as_deref(),
             Some("0.0.0.0:8080")
@@ -1268,6 +1296,54 @@ service_name = "edge-1"
     }
 
     #[test]
+    fn listen_addr_defaults_to_1883_but_can_be_disabled() {
+        assert_eq!(
+            Config::default().listen_addr.map(|a| a.to_string()),
+            Some("0.0.0.0:1883".to_string())
+        );
+
+        let mut cfg = Config::default();
+        cfg.apply_toml_str(r#"listen_addr = "0.0.0.0:0""#, "t.toml")
+            .unwrap();
+        cfg.normalize();
+        assert_eq!(cfg.listen_addr, None);
+    }
+
+    #[test]
+    fn port_zero_turns_any_listener_off() {
+        // Every one of the four listener addresses treats a literal :0 port
+        // as "off," normalized away before validate() ever sees it.
+        let mut cfg = Config {
+            listen_addr: Some("0.0.0.0:0".parse().unwrap()),
+            tls_listen_addr: Some("0.0.0.0:0".parse().unwrap()),
+            ws_listen_addr: Some("0.0.0.0:0".parse().unwrap()),
+            ws_tls_listen_addr: Some("0.0.0.0:0".parse().unwrap()),
+            ..Config::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.listen_addr, None);
+        assert_eq!(cfg.tls_listen_addr, None);
+        assert_eq!(cfg.ws_listen_addr, None);
+        assert_eq!(cfg.ws_tls_listen_addr, None);
+        // A :0-disabled TLS listener must not then be rejected for a
+        // "missing" certificate — normalize() runs before validate().
+        assert!(cfg.validate().is_ok());
+
+        // The layer-overlay gap this closes: a TOML file turns
+        // ws_listen_addr on, and only an explicit :0 from a higher layer
+        // (here, simulating the CLI layer directly) can turn it back off —
+        // nothing else in the model lets a higher layer un-set a lower
+        // layer's Some value.
+        let mut cfg = Config::default();
+        cfg.apply_toml_str(r#"ws_listen_addr = "0.0.0.0:1884""#, "t.toml")
+            .unwrap();
+        assert!(cfg.ws_listen_addr.is_some());
+        cfg.ws_listen_addr = Some("0.0.0.0:0".parse().unwrap()); // CLI layer
+        cfg.normalize();
+        assert_eq!(cfg.ws_listen_addr, None);
+    }
+
+    #[test]
     fn otlp_header_pairs_reject_malformed_input() {
         // A dropped API key is indistinguishable from an auth failure at the
         // collector, so a bad pair is an error, not a skip.
@@ -1378,7 +1454,7 @@ ha_discovery_prefix = "hass"
 "#;
         let mut cfg = Config::default();
         cfg.apply_toml_str(toml, "t.toml").unwrap();
-        assert_eq!(cfg.listen_addr.to_string(), "127.0.0.1:1884");
+        assert_eq!(cfg.listen_addr.unwrap().to_string(), "127.0.0.1:1884");
         assert_eq!(cfg.max_connections_per_ip, 20);
         assert_eq!(
             cfg.tls_listen_addr.map(|a| a.to_string()).as_deref(),
@@ -1455,6 +1531,6 @@ service_name = "edge-1"
             "t.toml",
         )
         .unwrap();
-        assert_eq!(cfg.listen_addr.to_string(), "0.0.0.0:1");
+        assert_eq!(cfg.listen_addr.unwrap().to_string(), "0.0.0.0:1");
     }
 }

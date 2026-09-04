@@ -21,7 +21,7 @@ use common::free_addr;
 
 fn make_broker(addr: SocketAddr, max_queued: u32) -> Broker {
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         max_queued_messages: max_queued,
         ..Config::default()
     };
@@ -41,7 +41,7 @@ fn make_broker(addr: SocketAddr, max_queued: u32) -> Broker {
 
 fn make_rate_limited_broker(addr: SocketAddr, max_per_ip: u32, window_secs: u32) -> Broker {
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         max_connections_per_ip: max_per_ip,
         connection_rate_window_secs: window_secs,
         ..Config::default()

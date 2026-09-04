@@ -25,7 +25,7 @@ use common::free_addr;
 /// Build a broker serving MQTT on `addr` and return the handle.
 fn make_broker(addr: SocketAddr) -> Broker {
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         ..Config::default()
     };
     let broker = Broker::new(

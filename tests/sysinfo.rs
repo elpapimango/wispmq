@@ -24,7 +24,7 @@ use common::free_addr;
 
 fn make_broker(addr: SocketAddr, sys_interval: u32) -> Broker {
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         sys_interval,
         ..Config::default()
     };
@@ -268,7 +268,7 @@ async fn ha_discovery_topics_do_not_inflate_the_retained_gauge() {
     // user retained data.
     let addr = free_addr();
     let config = Config {
-        listen_addr: addr,
+        listen_addr: Some(addr),
         sys_interval: 1,
         ha_discovery: true,
         service_name: "edge-1".to_string(),

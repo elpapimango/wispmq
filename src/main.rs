@@ -74,7 +74,10 @@ async fn main() -> Result<()> {
 
     tracing::info!(
         "starting broker: listen={} db={} max_packet={}B receive_max={} max_qos={:?}",
-        config.listen_addr,
+        config
+            .listen_addr
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "off".to_string()),
         config.db_path,
         config.max_packet_size,
         config.receive_maximum,
@@ -138,6 +141,19 @@ async fn main() -> Result<()> {
             tracing::error!("admin server stopped: {e}");
         }
     });
+
+    // Plain MQTT listener, if configured — no longer the process's one
+    // fatal/primary task (see the signals-only shutdown wait below): a bind
+    // failure here is logged and just leaves this listener down, the same
+    // as the other three.
+    if broker.config().listen_addr.is_some() {
+        let mqtt_broker = broker.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::run(mqtt_broker).await {
+                tracing::error!("MQTT listener stopped: {e}");
+            }
+        });
+    }
 
     // MQTT-over-WebSocket listener, if configured.
     if broker.config().ws_listen_addr.is_some() {
@@ -213,53 +229,40 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Serve MQTT until Ctrl-C or, on Unix, SIGTERM — the signal `docker stop`
-    // and most orchestrators send. Without an explicit handler SIGTERM's
-    // default disposition kills the process before any log line is written,
-    // which is why a stopped container can otherwise show no reason at all.
+    // Wait for Ctrl-C or, on Unix, SIGTERM — the signal `docker stop` and
+    // most orchestrators send. Without an explicit handler SIGTERM's default
+    // disposition kills the process before any log line is written, which is
+    // why a stopped container can otherwise show no reason at all.
+    //
+    // No listener future is in this race: all four MQTT/WebSocket listeners
+    // are spawned background tasks above (a bind failure logs and leaves
+    // just that one down, same treatment for all four — including the plain
+    // one, now that "no listener bound at all" is a valid, intentionally
+    // reachable state via listen_addr's off switch), so shutdown is anchored
+    // purely on these signals rather than on any of them returning.
     #[cfg(unix)]
-    let outcome = {
+    {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm =
             signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
         tokio::select! {
-            res = server::run(broker) => {
-                if let Err(e) = &res {
-                    tracing::error!("MQTT listener stopped with error: {e}");
-                }
-                res
-            },
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("SIGINT (Ctrl-C) received, shutting down");
-                Ok(())
             },
             _ = sigterm.recv() => {
                 tracing::info!("SIGTERM received, shutting down");
-                Ok(())
             },
         }
-    };
-    #[cfg(not(unix))]
-    let outcome = tokio::select! {
-        res = server::run(broker) => {
-            if let Err(e) = &res {
-                tracing::error!("MQTT listener stopped with error: {e}");
-            }
-            res
-        },
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("SIGINT (Ctrl-C) received, shutting down");
-            Ok(())
-        },
-    };
-    if let Err(e) = &outcome {
-        tracing::error!("broker exiting with error: {e}");
-    } else {
-        tracing::info!("broker shutdown complete");
     }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("SIGINT (Ctrl-C) received, shutting down");
+    }
+    tracing::info!("broker shutdown complete");
     // Flush the last telemetry batch — the one covering the shutdown itself.
     telemetry.shutdown();
-    outcome
+    Ok(())
 }
 
 /// Implements `--hash-password [username]`: hash a password (from the

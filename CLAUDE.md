@@ -61,8 +61,7 @@ itself is unchanged — it already operated on a generic `serde_json::Value`,
 the same pivot-through-JSON technique `Config::apply_toml_str` uses), closing
 the inconsistency the 0.9.3 note above flagged.
 
-Current status: `Cargo.toml` on `main` has since moved to a **0.9.6
-waypoint** — **another breaking change**: `listen_addr` and `ws_listen_addr`
+The **0.9.6 waypoint** — **another breaking change**: `listen_addr` and `ws_listen_addr`
 are now **always plain**. TLS on the MQTT port used to be "whichever of
 `tls_cert`/`tls_key` happen to be set wraps `listen_addr`"; that coupling is
 gone. TLS now lives on two new, independent, optional listener addresses —
@@ -89,7 +88,32 @@ now-unused cert/key options if going plain was actually intended.
 `server.rs`'s `run`/`run_ws` (always plain) gained siblings
 `run_tls`/`run_ws_tls` (always TLS, no-op if their address is unset), both
 built around new private `serve_mqtt`/`serve_ws` helpers so the accept-loop
-body isn't duplicated four times. CI (`ci.yml`) and image builds
+body isn't duplicated four times.
+
+Current status: `Cargo.toml` on `main` has since moved to a **0.9.7
+waypoint** — **another breaking change**, closing two gaps the 0.9.6 design
+left: `listen_addr` becomes `Option<SocketAddr>` (was a bare `SocketAddr`,
+always bound, no way to turn the plain MQTT listener off at all — the only
+one of the four addresses without an off switch), and a literal `:0` port on
+**any** of the four listener addresses is now treated as "off," the same as
+leaving the field unset (`Config::normalize`, run once — after the CLI layer,
+before `Config::validate` — in `Config::from_cli`). `:0` matters beyond just
+giving `listen_addr` an off switch: under the layered config model (defaults
+< file < env < CLI, each layer only ever supplying a *new* `Some`), nothing
+previously let a *higher* layer turn a listener a *lower* layer had already
+enabled back off — a flag can override an address, never un-set one. `:0` is
+now that explicit, layer-independent "off," for all four fields uniformly.
+
+This also finally makes "no listener bound at all" (or specifically,
+`listen_addr` off with only `tls_listen_addr` configured — a TLS-only
+broker) a state the process can sit in without exiting immediately, which
+required a `main.rs` shutdown-model change: `server::run` (the plain
+listener) is no longer the one fatal/primary future the whole process
+raced against SIGINT/SIGTERM — it's now a spawned background task,
+symmetric with `run_ws`/`run_tls`/`run_ws_tls` (a bind failure logs and
+just leaves that listener down, not fatal to the process, for any of the
+four). The bottom of `main` waits purely on Ctrl-C/SIGTERM now, with no
+listener future in that race at all. CI (`ci.yml`) and image builds
 (`docker.yml`) are green on `main`. `git log` has the detail — this is the
 map. See "Done since 0.9.0" below for what else has landed since 0.9.2.
 
@@ -323,8 +347,11 @@ address and a dedicated always-TLS address that can run at the same time:
 `--ws-tls-listen-addr` (TLS/mutual TLS, needs `--ws-tls-cert`/
 `--ws-tls-key`). All four addresses are independent — any subset can be
 configured, all at once if wanted (see `server::run`/`run_tls`/`run_ws`/
-`run_ws_tls`, built on the shared `serve_mqtt`/`serve_ws` accept loops).
-Client-cert CN becomes the authenticated identity for ACLs on either TLS
+`run_ws_tls`, built on the shared `serve_mqtt`/`serve_ws` accept loops), and
+any one of them (including `listen_addr`, since 0.9.7) can be switched off
+with a port of `0` — the process tolerates zero listeners bound just as
+readily as four. Client-cert CN becomes the authenticated identity for ACLs
+on either TLS
 transport.
 
 ### Metrics and `$SYS`
@@ -438,7 +465,7 @@ format.
 
 ## Tests
 
-115 tests on default features (121 with `--features otel`), plus five
+117 tests on default features (123 with `--features otel`), plus five
 `#[ignore]`d benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`,
 `config`, `auth`, `storage`, `metrics`, `otel`); integration suites are in
 `tests/`:
@@ -575,9 +602,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (115 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (117 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (121).
+  `cargo test --features otel` (123).
 
 ## Conventions
 
