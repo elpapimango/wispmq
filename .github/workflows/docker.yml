@@ -15,7 +15,7 @@ jobs:
     name: build & push image
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -61,3 +61,14 @@ jobs:
           # No attestation/SBOM child manifests (the multi-arch index still has
           # one image manifest per platform, which is expected).
           provenance: false
+
+      # Only on a version tag push (not a plain `main` push or manual
+      # dispatch): the image above is already built and pushed for this tag,
+      # so cut the matching GitHub Release in the same run instead of it
+      # being a separate manual step someone has to remember.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release create "$TAG_NAME" --generate-notes
