@@ -117,6 +117,30 @@ listener future in that race at all. CI (`ci.yml`) and image builds
 (`docker.yml`) are green on `main`. `git log` has the detail — this is the
 map. See "Done since 0.9.0" below for what else has landed since 0.9.2.
 
+The **0.9.8 waypoint** — **another breaking change**: `codec`, `packet`,
+`framing`, `topic` and `types` moved out of this crate into
+[`wispmq-protocol`](https://github.com/elpapimango/wispmq-protocol), a new
+crate published to crates.io and shared with `wispmq-cli` (previously an
+almost byte-for-byte in-tree duplicate of these same five modules). This
+crate re-exports them (`pub use wispmq_protocol::{codec, framing, packet,
+topic, types};` in `lib.rs`), so `wispmq::codec::X`, `wispmq::packet::Publish`,
+etc. still resolve at the same path for anything depending on `wispmq` as a
+library — the one real break is `packet::Connect::password`'s type, which
+changed from `Vec<u8>` to `wispmq_protocol::secret::SecretBytes` (a buffer
+that zeroes itself on drop; this unifies the client-side hardening
+`wispmq-cli` already had onto the broker side too — `Deref<Target = [u8]>`
+means most call sites needed no change, only construction sites do, e.g.
+`bridge.rs`'s outbound CONNECT). `error.rs`'s `MqttError` keeps its own
+6-variant shape (the extra `Storage`/`Config` variants have no
+protocol-layer counterpart) plus a new
+`From<wispmq_protocol::error::MqttError>` impl, since codec/packet/framing/
+topic now return the shared crate's narrower error type. `message.rs` (the
+broker's routable/persistable application message, built on top of the
+shared `Publish` packet) stays here — it's broker-specific, not wire
+protocol. Test count dropped from 117/123 (default/`otel`) to 111/117 — the
+moved tests (topic matching, `SecretBytes`) now live and run in
+`wispmq-protocol`'s own suite, not duplicated here.
+
 Milestones, in order:
 1. Core MQTT **v5.0** broker: codec (all 15 packets + properties/reason codes),
    sessions + routing + QoS 0/1/2, retained messages, wills, SQLite persistence,
@@ -300,6 +324,11 @@ before changing it.
 - `packet` — encode/decode for all 15 control packets (§3)
 - `framing` — async read/write of whole packets over any `AsyncRead`/`AsyncWrite`
 - `topic` — topic-name/filter validation + wildcard matching (§4.7/§4.8)
+
+  The five modules above live in the [`wispmq-protocol`](https://github.com/elpapimango/wispmq-protocol)
+  crate (shared with `wispmq-cli`) and are re-exported here unchanged — see
+  the 0.9.8 waypoint above. Their source, including their unit tests, is in
+  that repo, not this one.
 - `message` — the routable application message (queue/retain/persist form)
 - `broker` — session registry, routing, QoS state machines, retained store,
   wills, ACL enforcement. One `impl Broker` split across `broker/*.rs` by spec
@@ -465,10 +494,11 @@ format.
 
 ## Tests
 
-117 tests on default features (123 with `--features otel`), plus five
-`#[ignore]`d benchmarks. Unit tests live in-module (`topic`, `acl`, `cli`,
-`config`, `auth`, `storage`, `metrics`, `otel`); integration suites are in
-`tests/`:
+111 tests on default features (117 with `--features otel`), plus five
+`#[ignore]`d benchmarks. Unit tests live in-module (`acl`, `cli`, `config`,
+`auth`, `storage`, `metrics`, `otel`) — `topic` and `packet::Connect`'s
+`SecretBytes` tests moved to `wispmq-protocol`'s own suite (0.9.8 waypoint
+above); integration suites are in `tests/`:
 
 - `tests/interop.rs` — TCP round trips using the crate's own codec, per version.
 - `tests/websocket.rs` — `ws://` and `wss://` round trips via `tokio-tungstenite`;
@@ -602,9 +632,9 @@ Notes for picking up in a new session/machine:
   the CLI needs a `gh` token with `read:packages`/`delete:packages` (the default
   `repo,workflow,...` scopes can't list or delete packages).
 - **Verify a checkout**: `cargo fmt --all -- --check && cargo clippy
-  --all-targets --all-features -- -D warnings && cargo test` (117 tests), then
+  --all-targets --all-features -- -D warnings && cargo test` (111 tests), then
   `cargo run -- --help`. The OTLP suite needs its feature:
-  `cargo test --features otel` (123).
+  `cargo test --features otel` (117).
 
 ## Conventions
 

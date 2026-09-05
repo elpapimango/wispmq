@@ -71,6 +71,21 @@ impl From<rusqlite::Error> for MqttError {
     }
 }
 
+/// Protocol-layer errors from `wispmq-protocol` (codec/packet/framing/topic)
+/// map onto this crate's broader error type one-for-one; `Storage`/`Config`
+/// have no protocol-layer counterpart.
+impl From<wispmq_protocol::error::MqttError> for MqttError {
+    fn from(e: wispmq_protocol::error::MqttError) -> Self {
+        use wispmq_protocol::error::MqttError as P;
+        match e {
+            P::Malformed(m) => MqttError::Malformed(m),
+            P::Protocol(m) => MqttError::Protocol(m),
+            P::Reason(rc, m) => MqttError::Reason(rc, m),
+            P::Io(e) => MqttError::Io(e),
+        }
+    }
+}
+
 /// Convenience constructors.
 pub fn malformed(msg: impl Into<String>) -> MqttError {
     MqttError::Malformed(msg.into())

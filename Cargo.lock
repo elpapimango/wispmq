@@ -2484,7 +2484,7 @@ checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "wispmq"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "bytes",
  "clap",
@@ -2504,7 +2504,18 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "wispmq-protocol",
  "x509-parser 0.16.0",
+]
+
+[[package]]
+name = "wispmq-protocol"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68f24bffdf0fb57d855afbbbc18d143f199c4d9515695542af855f14526f499d"
+dependencies = [
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [package]
 name = "wispmq"
-version = "0.9.7"
+version = "0.9.8"
 edition = "2021"
 description = "WispMQ — an MQTT v5.0 / 3.1.1 / 3.1 broker in Rust: TCP/TLS/mTLS/WebSockets, auth, ACLs, SQLite, Prometheus metrics"
 license = "MIT OR Apache-2.0"
@@ -23,6 +23,7 @@ otel = [
 ]
 
 [dependencies]
+wispmq-protocol = "0.1"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "io-util"] }
 bytes = "1.12"
 rusqlite = { version = "0.40", features = ["bundled"] }

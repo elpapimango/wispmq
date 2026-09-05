@@ -665,7 +665,10 @@ fn build_connect(cfg: &BridgeConfig) -> Connect {
         client_id: cfg.client_id.clone(),
         will: None,
         username: cfg.username.clone(),
-        password: cfg.password.as_ref().map(|p| p.as_bytes().to_vec()),
+        password: cfg
+            .password
+            .as_ref()
+            .map(|p| wispmq_protocol::secret::SecretBytes::from(p.as_bytes().to_vec())),
     }
 }
 

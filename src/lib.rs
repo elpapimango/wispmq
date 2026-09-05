@@ -7,9 +7,11 @@
 #![allow(clippy::large_enum_variant, clippy::result_large_err)]
 //!
 //! Modules mirror the layered design: `codec` (wire primitives + properties),
-//! `packet` (the 15 control packets), `topic` (filter matching), `message`
-//! (the routable application message), `broker` (sessions + routing),
-//! `storage` (SQLite persistence) and `server` (tokio networking).
+//! `packet` (the 15 control packets) and `topic` (filter matching) come from
+//! the `wispmq-protocol` crate (shared with `wispmq-cli`) and are re-exported
+//! here unchanged; `message` (the routable application message), `broker`
+//! (sessions + routing), `storage` (SQLite persistence) and `server` (tokio
+//! networking) are broker-specific and stay in this crate.
 
 pub mod acl;
 pub mod admin;
@@ -17,19 +19,16 @@ pub mod auth;
 pub mod bridge;
 pub mod broker;
 pub(crate) mod cli;
-pub mod codec;
 pub mod config;
 pub mod error;
-pub mod framing;
 pub mod message;
 pub mod metrics;
 pub mod otel;
-pub mod packet;
 pub mod ratelimit;
 pub mod server;
 pub mod storage;
 pub mod sysinfo;
 pub mod tls;
-pub mod topic;
-pub mod types;
 pub mod ws;
+
+pub use wispmq_protocol::{codec, framing, packet, topic, types};

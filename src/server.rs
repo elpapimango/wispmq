@@ -256,7 +256,7 @@ where
             p
         }
         Ok(Ok(ReadOutcome::Eof)) => return Ok(()),
-        Ok(Err(e)) => return Err(e),
+        Ok(Err(e)) => return Err(e.into()),
         Err(_) => return Err(MqttError::Protocol("CONNECT timeout".into())),
     };
 
